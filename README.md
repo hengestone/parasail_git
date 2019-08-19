@@ -1,6 +1,12 @@
 # Parasail unauthorized
 Open source files from the Parasail 8 release.
 
+# Getting started
+Following the instructions in `documentation/parasail_release_notes.txt -> BUILDING PARASAIL FROM SOURCES` on Ubuntu 19.10:
+ - `apt-get install gnat texlive llvm clang`
+ - `make -j 6 all_no_gtk`
+ - `bin/pslc.csh -d -b3`
+
 # Licensing
 Parasail is developed by AdaCore, and licensed mostly under the GPLv3, unless otherwise specified in any individual file. The standard library is marked as "as-is, no warranty".
 
