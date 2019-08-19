@@ -1,0 +1,84 @@
+It is time to create some sort of ParaSail debugger.  Initially it
+should support the interpreter, but eventually it would be nice
+if a failure in compiled code could also drop the user into the
+debugger, at least under some conditions.
+
+The debugger needs to be able to display the status of things, 
+for each server/picothread, be able to go up and down the stack,
+show the set of local variables, show the contents of local variables
+in any stack frame, single step, stop at a breakpoint.
+
+For compiled code, single stepping seems less critical, but being able
+to take control on a failure, and walk up and down the stack, displaying
+local and global variables seems very useful.
+
+All of this implies having some sort of symbol table associated with a
+routine, so we know what is where on the stack (or in an LLVM register?).
+We probably want to know which local addresses are always "stored through"
+if it is too hard to keep track of registers.  In "debug mode" we would
+store through all stack slots associated with named variables, during
+their lifetime.
+
+The debugger and the read/eval/print interpreter should share as much
+as possible, including a history, etc.
+
+The "program" being written in the read/eval/print interpreter should itself
+be compiled to PSVM, and potentially be saved into a file (or always be
+written into a temp file?).
+
+When we enter the debugger, we should "quiesce" all of the other servers.
+This might be done by adding a special picothread onto all of the servers
+queue, which will wait until the debugger allows them to proceed again.
+
+---  13-Sep-2015
+
+To get started, we want to be able to stop at assertion failures
+or other failures and look around.  It would also be nice to have
+some kind of trace buffer so we could see what happened just before
+the failure.  A decent trace-back would be very nice, and we could
+produce that even if we don't stop at an assertion failure.
+
+---  29-Jan-2019
+
+The interactive debugger is now working, at least when in the interpreter.
+
+It would be nice to be able to show sets and maps in a more natural
+format.  We know something is a "map"-like thing if it has an "index_set"
+and an "indexing" operation.  We know something is a "set"-like thing
+if it has a "Remove_XXX" operation (First, Any).  We should use "Remove_First"
+if available for both maps and sets; otherwise use Remove_Any.
+If there is a "Remove_First" then we should be looking for consecutive
+values when displaying a set, so long as the element type supports
+"=?" and "+"(Univ_Integer, element_type) -> element_type.
+
+We should look for a "To_String" first.  This implies invoking
+an operation given its declaration.  We need the enclosing type
+somehow.  That could be provided by a generic, except we don't have
+a type.  And how do we know what to call?  Some kind of special import?
+
+    func To_String(Val : optional Univ_Integer) -> Univ_String
+      is import(type => type_desc, routine => routine_desc);
+
+We should define a type for an unsigned 64-bit word with no "null" value,
+and use if for these cases.  E.g. Modular_64 or Modular_Word.
+
+We still need to implement the "locals" command, and then eventually
+some kind of "print" command for an arbitrary name or expression.
+
+----- 2-Feb-2019
+
+It would be nice to be able to show parameters of nested block, e.g. the
+loop parameters, when requesting locals.  We could use a Declare_Obj_Op
+for such parameters, conceivably, though their location would be the
+block parameter area.
+
+Need to worry about local "ref"s -- need to know they have a level
+of indirection.
+
+-------- 6-Feb-2019
+
+Should detect case where nothing is assigned to the return value, and you fall
+off the end.
+How to do this?  We could keep track of the number of assignments to the result object.  Even better would be to do some modicum of control flow.  Could do
+this for all local variables.  Could also identify unused constants, and
+variables that are only initialized once.

@@ -1,0 +1,13 @@
+We claim that scripting languages don't need to be dynamically typed to be
+friendly and productive.  By providing convenient default types for
+literals and aggregates, we can minimize the amount of explicit mention
+of types.  Specifying types of formal parameters is just good sense, and
+there really is no advantage of leaving them off.  ParaSail allows a type
+name to substitute for a parameter name, so in cases where there is only
+one parameter of a given type, that is a simple short-hand.
+
+We would want to add implicitly-typed "Set" and "Map" (aka Dictionary)
+aggregates.  We would determine the Set/Map type to use based on
+the range of types in the initial aggregate.  If it is empty, we would
+look forward in the program for what types are being added, or we could
+assume Imageable+.

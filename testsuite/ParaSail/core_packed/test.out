@@ -1,0 +1,14 @@
+Bits_Per_Elem = 9
+Elems_Per_Word = 6
+Mask = 511
+Red = [#red => 51, #green => 0, #blue => 0]
+Blue = [#red => 0, #green => 0, #blue => 51]
+Yellow = [#red => 0, #green => 51, #blue => 51]
+White = [#red => 255, #green => 255, #blue => 255]
+Partial = [#red => 255, #green => 255, #blue => null]
+Arr = [#red => 119, #green => 119, #blue => 119]
+About to update Arr[#green] with 0x33 (= 51)
+About to update Arr[#blue] with 0x55 (= 85)
+Arr now = [#red => 119, #green => 51, #blue => 17]
+RR = [#red => 51, #green => 17, #blue => 119]
+VV = [3, 51, 23, 7, 17]

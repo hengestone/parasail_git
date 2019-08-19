@@ -1,0 +1,18 @@
+// Copyright (C) 2011-2016, AdaCore, New York, NY
+// This program is provided "as is" with no warranty.
+// Report errors at http://groups.google.com/group/parasail-programming-language
+
+import PSC::Reflection
+
+interface PSC::VM_Object is
+   type VM_Obj_Id_Type is Reflection::VM_Obj_Id_Type
+   type LLVM_Reg_Type is Univ_String;
+   const Id : VM_Obj_Id_Type
+   const Dest_Name : Univ_String
+   const Is_Var : Boolean
+   const LLVM_Reg : LLVM_Reg_Type
+   var Might_Be_Null : Boolean := True
+   var Is_Uplevel_Refed : Boolean := False
+   var Frame_Rec_Offset : optional Reflection::Offset_Within_Area := null
+   
+end interface PSC::VM_Object

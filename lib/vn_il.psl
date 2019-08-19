@@ -1,0 +1,630 @@
+// VN_IL: VN-Based Intermediate Language
+
+// Copyright (C) 2011-2015, AdaCore, New York, NY
+// This program is provided "as is" with no warranty.
+// Report errors at http://groups.google.com/group/parasail-programming-language
+
+import PSC::Reflection
+import PSC::Analysis::Op_Ctx
+import PSC::Analysis::ParaScope
+import PSC::Analysis::Local_Addr_VN
+import PSC::CFG
+
+class PSC::VN_IL_Type is
+
+   const Debug : Boolean := #false
+
+   var Op_Ctx : PSC::Analysis::Op_Ctx
+
+   type Addr_VN_Id is VN_Id  //  VNs used to represent addresses
+
+   var VN_Init_Places : Map<VN_Id, Vector<Code_Index>> := []
+      //  Keeps track of where given VN has been assigned a value
+      //  in the generated LLVM.  Vector gives the code indices
+      //  where the VN was loaded.  First code index is where %vn_ID
+      //  is init'ed.  Second code index is where %vn_ID_2 is init'ed.  Etc.
+      //  VN can be re-used at any point that is dominated by point
+      //  where it is init'ed.
+
+   var Parallel_Output_Addrs :
+     Ordered_Map<Key_Type => VN_Id, Value_Type => Univ_String> := []
+      //  Mapping from VN to LLVM register name for address where value
+      //  is temporarily being kept, because it is the output
+      //  of a parallel operation that might not yet be completed.
+
+   var Local_Values_Held_In_VNs : Map<Reflection::Object_Locator,
+        Ordered_Map<Code_Index, VN_Id>> := []
+      //  Keeps track of which local values are held only in a VN,
+      //  and the index of the instruction where the original Store occured.
+
+   var VN_Flush_Places : Map<VN_Id, Ordered_Set<Code_Index>> := []
+      //  Keeps track of where given VN has been flushed to memory.
+      //  This is only used for VNs that at least at some point hold
+      //  a value that has not been flushed to memory.
+
+   const Zero_Base  := Reflection::Object_Locator::Zero_Base;
+   const Local_Area := Reflection::Object_Locator::Local_Area;
+   const Param_Area := Reflection::Object_Locator::Param_Area;
+   const Type_Area  := Reflection::Object_Locator::Type_Area;
+   const Const_Area := Reflection::Object_Locator::Const_Area;
+   const Enclosing_Param_Areas :=
+      Reflection::Object_Locator::Enclosing_Param_Areas;
+   const Enclosing_Local_Areas :=
+      Reflection::Object_Locator::Enclosing_Local_Areas;
+   const Enclosing_Type_Areas :=
+      Reflection::Object_Locator::Enclosing_Type_Areas;
+   const Base_Registers := Reflection::Object_Locator::Base_Registers;
+   const Phys_Base_Registers :=
+      Reflection::Object_Locator::Phys_Base_Registers;
+
+   func Enclosing_Node(VN_IL : VN_IL_Type; I : Code_Index) -> CFG::Node_Id is
+     //  Return ID of Node enclosing given Code_Index
+      return VN_IL.Op_Ctx.Enclosing_Node(I)
+   end func Enclosing_Node
+
+   func Instr_Dominates(VN_IL : VN_IL_Type;
+                        Inited : Code_Index; Refed : Code_Index)
+     -> Result : Boolean is
+     //  Return True if block containing instr at "Inited" dominates
+     //  block contain instr at "Refed"
+      Result := VN_IL.Op_Ctx.CFG.Get_Dominator_Tree().Dominates
+         (VN_IL.Enclosing_Node (Inited), VN_IL.Enclosing_Node (Refed))
+      if Debug then
+         Println (" Instr " | Inited | (Result? " dominates " :
+                                                " does not dominate ") |
+                  Refed)
+      end if
+   end func Instr_Dominates
+
+   func Instr_Postdominates(VN_IL : VN_IL_Type;
+                            Inited_Again : Code_Index; Inited : Code_Index)
+     -> Result : Boolean is
+     //  Return True if block containing instr at "Inited_Again" postdominates
+     //  block contain instr at "Inited"
+      Result := VN_IL.Op_Ctx.CFG.Get_Dominator_Tree().Postdominates
+         (VN_IL.Enclosing_Node (Inited_Again), VN_IL.Enclosing_Node (Inited))
+      if Debug then
+         Println (" Instr " | Inited_Again |
+                  (Result? " postdominates " : " does not postdominate ") |
+                  Inited)
+      end if
+   end func Instr_Postdominates
+
+   func Might_Need_To_Flush_VNs
+     (VN_IL : VN_IL_Type; Instr_Index : Code_Index;
+      B_Or_A : Before_Or_After) -> Boolean is
+     //  Return True if we might need to flush VNs before/after the given
+     //  instruction is performed.
+      const This_BB := VN_IL.Enclosing_Node (Instr_Index)
+      const This_Instr := VN_IL.Op_Ctx.Routine.Nth_Instr(Instr_Index)
+
+      case B_Or_A of
+
+       [#before] =>
+
+         case Opcode(This_Instr) of
+            [#Call_Op | #Store_Address_Op | #Assign_Word_Op |
+             #Start_Parallel_Call_Op | #Add_Parallel_Call_Op |
+             #Start_Parallel_Op | #Add_Parallel_Op] =>
+               // We might need to store some VNs before these ops
+               return #true
+
+            [#Skip_Op | #If_Op] =>
+               // Might need to flush before if any successor is a join
+
+               //  Check whether Node has any successors that are join points
+               const Succs := VN_IL.Op_Ctx.CFG.Successors(This_BB)
+               return (for some S of Succs =>
+                        |VN_IL.Op_Ctx.CFG[S].Incoming_Edges| > 1)
+
+            [#Wait_For_Parallel_Op] =>
+               // NOTE: Wait_For_Parallel_Op ends with a branch
+               //       so we don't want any flushes following them,
+               //       but we don't need any flushes before them either.
+               return #false
+
+            [..] =>
+               // Nothing special, so no need to flush before this instruction
+               return #false
+         end case
+
+       [#after] =>
+
+         if VN_IL.Op_Ctx.CFG[This_BB].Last != Instr_Index then
+            return #false  //  No need to flush unless this is the last
+                           //  instruction of the basic block
+         end if
+
+         //  Look at the instruction; don't flush after terminating instruction
+
+         case Opcode(This_Instr) of
+
+            [#Skip_Op   | #If_Op   | #Wait_For_Parallel_Op |
+             #Return_Op | #Exit_Op | #Check_Not_Null_Op] =>
+               // Don't want to flush after any instruction that ends with
+               // a branch
+               return #false
+
+            [..] =>
+               // We are at end of basic block, check whether following
+               // block is a join point.
+
+               //  Check whether Node has any successors that are join points
+               const Succs := VN_IL.Op_Ctx.CFG.Successors(This_BB)
+               return (for some S of Succs =>
+                        |VN_IL.Op_Ctx.CFG[S].Incoming_Edges| > 1)
+
+         end case
+      end case
+   end func Might_Need_To_Flush_VNs
+
+   func Need_To_Flush_VN
+     (VN_IL : VN_IL_Type; Instr_Index : Code_Index;
+      VN : VN_Id; Locator : Reflection::Object_Locator;
+      B_Or_A : Before_Or_After) -> Boolean is
+     //  Return True if given VN needs to be flushed back to given
+     //  locator at the start/end of the given instruction.
+
+      if not VN_IL.VN_Is_Inited(VN, Instr_Index) then
+         //  VN not initialized at this point
+         if Debug then
+            Println("In " | VN_IL.Op_Ctx.Routine.Name() |
+              " VN" | VN | " " | Locator | " not inited at " | Instr_Index |
+              " so no need to flush")
+         end if
+         return #false
+      end if
+
+      //  See whether VN has been flushed in a place that dominates
+      //  the current instruction.
+      if VN in VN_IL.VN_Flush_Places then
+         for Flush_Place in VN_IL.VN_Flush_Places[VN] loop
+            if VN_IL.Instr_Dominates(Flush_Place, Instr_Index) then
+               //  There was a flush that dominates the current instruction.
+               if Debug then
+                  Println("In " | VN_IL.Op_Ctx.Routine.Name() |
+                    " VN" | VN | " " | Locator | " was flushed at " |
+                    Flush_Place | " so no need to flush at " | Instr_Index);
+
+               end if
+               return #false
+            end if
+         end loop
+      end if
+
+      const This_BB := VN_IL.Enclosing_Node (Instr_Index)
+
+      case B_Or_A of
+
+       [#before] =>
+
+         const This_Instr := VN_IL.Op_Ctx.Routine.Nth_Instr(Instr_Index)
+         const This_Op := Opcode(This_Instr)
+
+         case This_Op of
+            [#Store_Address_Op] =>
+               //  Check whether target matches Locator
+               return Locator == Source(This_Instr)
+
+            [#Assign_Word_Op] =>
+               //  Check whether target matches Locator
+               return Locator == Destination(This_Instr)
+
+            [#Call_Op | #Start_Parallel_Call_Op | #Add_Parallel_Call_Op] =>
+               //  Check whether locator matches uplevel reference of routine.
+               const Target_Index := This_Op == #Call_Op?
+                                This_Instr.Target_Index() :
+                                This_Instr.Parallel_Target_Index()
+
+               if Target_Index == 0 then
+                  //  Indirect call; assume the worst
+                  return #true
+               end if
+
+               const Routine : Reflection::Routine :=
+                 Routine_At_Index (Target_Index)
+
+               const Level := Nesting_Level(Routine)
+
+               if Level == 0 then
+                  //  non-nested routines make no up-level references.
+                  return #false
+               end if
+
+               return #true  //  TBD: Check whether locator is in uplevel refs
+
+            [#Start_Parallel_Op | #Add_Parallel_Op] =>
+               //  Check whether locator matches uplevel reference of nested blk
+               return #true //  TBD
+
+            [#Skip_Op | #If_Op] =>
+               //  Check to see if locator corresponds to a phi of successor
+               null  //  Fall through
+
+            [..] =>
+               {#false}  //  Should not get here
+               return #false
+         end case
+
+       [#after] =>
+
+         null  //  Fall through to check if locator matches phi of successor
+      end case
+
+      //  Check if Locator matches phi of successor
+
+      if Base(Locator) != Local_Area then
+         return #false  // Only worried about variables on local stack
+      end if
+
+      const This_Level := VN_IL.Op_Ctx.Level_Of_BB (This_BB)
+
+      //  Look at successors that are join points
+      ref CFG => VN_IL.Op_Ctx.CFG
+      ref OI_Data => VN_IL.Op_Ctx.OI_Data
+      ref DT => CFG.Get_Dominator_Tree()
+
+      const Succs := CFG.Successors(This_BB)
+
+      for each Join of Succs {|CFG[Join].Incoming_Edges| > 1} loop
+         if DT.Is_Loop_Header(Join)
+           and then Join in VN_IL.Op_Ctx.Loops_With_Uplevel_Refs
+         then
+            //  TBD: This should be more specific to see whether
+            //       up-level reference matches locator/VN combo.
+            if Debug then
+               Println("In " | VN_IL.Op_Ctx.Routine.Name() | " flushing at " |
+                       Instr_Index | " before loop with uplevel refs")
+            end if
+            return #true
+         end if
+
+         if Join in OI_Data.Node_Phi_Id_Maps then
+            ref Phis => OI_Data.Node_Phi_Id_Maps[Join]
+            for each [Phi_Addr => Phi_OID] of OI_Data.Node_Phi_Id_Maps[Join]
+            loop
+               case VN_IL.Op_Ctx.VN_Data.Table[Phi_Addr] of
+                  [Local_Addr : PSC::Analysis::Local_Addr_VN] =>
+                     if This_Level == Local_Addr.Level
+                       and then Offset(Locator) == Local_Addr.Offset
+                     then
+                        //  This locator appears as the address of a Phi
+                        //  in this Join point
+                        if Debug then
+                           Println("In " | VN_IL.Op_Ctx.Routine.Name() |
+                            " flushing VN" | VN | " " | Locator |
+                            " at " | Instr_Index |
+                            " before loop with phi OID" | Phi_OID)
+                        end if
+                        return #true
+                     end if
+                  [..] =>
+                     null
+               end case
+            end loop
+         end if
+      end loop
+
+      return #false  //  Not a phi of any successor
+
+   end func Need_To_Flush_VN
+
+ exports
+   func Analyze(Item : Reflection::Decl {Kind(Item) == #operation})
+     -> Result : optional VN_IL_Type is
+      //  Analyze and create a VN-based representation of the given operation
+      
+      const Routine := Routine_For_Operation(Item);
+
+      //  Establish a context for analysis
+      Result := (Op_Ctx =>
+                   (Routine => Routine, Pass => #find_basic_blocks))
+
+      if Debug then
+         Println("Starting ParaScope on " | Id(Item))
+      end if
+
+      PSC::Analysis::ParaScope::Analyze_Operation(Item, Result.Op_Ctx)
+
+      if Debug then
+         Println("Ending ParaScope on " | Id(Item))
+      end if
+      return Result
+   end func Analyze
+
+   func Start_Nested_Block(var VN_IL : VN_IL_Type) is
+      //  Start of a nested block; No VNs are initialized.
+      VN_IL.VN_Init_Places := []
+      VN_IL.VN_Flush_Places := []
+      VN_IL.Local_Values_Held_In_VNs := []
+   end func Start_Nested_Block
+
+   func Contents_Of_Locator
+     (var VN_IL : VN_IL_Type; Instr_Index : Code_Index;
+      Locator : Reflection::Object_Locator;
+      Addr : Univ_String;
+      Num_Indir, Ptr_Level : Univ_Integer := 0)
+     -> Result : optional VN_Id is
+     //  Return VN representing contents of Locator
+     //  Addr string is remembered for later indirect store.
+
+      const Node := VN_IL.Enclosing_Node(Instr_Index)
+      {Node not null}
+      const Level := VN_IL.Op_Ctx.Level_Of_BB(Node)
+
+      if Num_Indir == 0
+        and then Instr_Index in VN_IL.Op_Ctx.Instr_To_Addr_Fetch_VNs
+      then
+         const Loc_VN := VN_IL.Op_Ctx.Addr_VN_For_Locator(Locator, Instr_Index)
+
+         if Loc_VN not null
+           and then Loc_VN in VN_IL.Op_Ctx.Instr_To_Addr_Fetch_VNs[Instr_Index]
+         then
+            Result :=
+              VN_IL.Op_Ctx.Instr_To_Addr_Fetch_VNs[Instr_Index][Loc_VN]
+         end if
+      end if
+
+      if Debug then
+         Println(" Contents_Of_Locator(" | Num_Indir * "*" | Locator |
+           ", " | Addr |
+           ") in BB" | Node |
+           (Level > 0? "(l" | Level | ")" : "") | ", instr#" | Instr_Index |
+           ", Result = VN" | Result)
+      end if
+      return Result
+   end func Contents_Of_Locator
+
+   func Target_For_Store
+     (var VN_IL : VN_IL_Type; Instr_Index : Code_Index;
+      Locator : Reflection::Object_Locator;
+      Ptr_Level : Univ_Integer := 0) -> Result : optional VN_Id is
+     //  Return VN into which value should be copied.
+     //  Return null if no VN associated with locator.
+
+      const Node := VN_IL.Enclosing_Node(Instr_Index)
+      {Node not null}
+      const Level := VN_IL.Op_Ctx.Level_Of_BB(Node)
+
+      if Instr_Index in VN_IL.Op_Ctx.Instr_To_Addr_Store_VNs then
+         const Loc_VN := VN_IL.Op_Ctx.Addr_VN_For_Locator(Locator, Instr_Index)
+         if Loc_VN not null
+           and then Loc_VN in VN_IL.Op_Ctx.Instr_To_Addr_Store_VNs[Instr_Index]
+         then
+            Result :=
+              VN_IL.Op_Ctx.Instr_To_Addr_Store_VNs[Instr_Index][Loc_VN]
+         end if
+      end if
+
+      if Debug then
+         Println(" Target_For_Store(" | Locator |
+           ") in BB" | Node |
+           (Level > 0? "(l" | Level | ")" : "") | ", instr#" |
+           Instr_Index | ", Result = VN" | Result)
+      end if
+      return Result
+   end func Target_For_Store
+
+   func Object_Was_Copied
+     (var VN_IL : VN_IL_Type; Instr_Index : Code_Index;
+      Locator : Reflection::Object_Locator) is
+     //  About to store into object at given locator, and we don't
+     //  want it to look like its VN is already properly initialized.
+      const Dest_VN := VN_IL.Target_For_Store(Instr_Index, Locator)
+
+      if Dest_VN not null
+        and then VN_IL.VN_Is_Inited(Dest_VN, Instr_Index)
+      then
+         //  Forget what we know about Dest_VN
+         //  TBD: Is there a problem if we haven't stored the VN?
+         const Exit_Node :=
+           VN_IL.Op_Ctx.Entry_Node_To_Exit_Node_Map
+             [VN_IL.Op_Ctx.Entry_Node_For_BB
+                (VN_IL.Op_Ctx.Enclosing_Node(Instr_Index))]
+         const Final_Instr := VN_IL.Op_Ctx.CFG[Exit_Node].Last
+
+         for each Code of VN_IL.VN_Init_Places[Dest_VN] loop
+            if VN_IL.Instr_Dominates (Code, Instr_Index) then
+               //  Make sure this entry does not dominate anything
+               Code := Final_Instr
+            end if
+         end loop
+      end if
+
+   end func Object_Was_Copied
+
+   func Target_For_Store_Indir
+     (var VN_IL : VN_IL_Type; Addr : Univ_String) -> optional VN_Id is
+     //  Return VN into which value should be copied rather than
+     //  stored via Addr.
+      if Debug then
+         Println(" Target_For_Store_Indir(" | Addr | ")")
+      end if
+      return null  //  TBD
+   end func Target_For_Store_Indir
+
+   func VN_Is_Inited (VN_IL : VN_IL_Type;
+                      VN : VN_Id; Instr_Index : Code_Index) -> Boolean is
+     //  Return True if VN has been initialized at a place that dominates
+     //  the instruction at the given index.
+      if VN not in VN_IL.VN_Init_Places then
+         //  VN has never been init'ed
+         return #false
+      else
+         //  Check whether VN has been init'ed in a place that dominates
+         //  Instr_Index
+         return (for some Code of VN_IL.VN_Init_Places[VN] =>
+            VN_IL.Instr_Dominates (Code, Instr_Index))
+      end if
+   end func VN_Is_Inited
+
+   func VN_Inited_Here (var VN_IL : VN_IL_Type;
+                        VN : VN_Id; Instr_Index : Code_Index;
+                        Parallel_Output_Addr : optional Univ_String := null) is
+     //  Record the index of the instruction where VN is being init'ed.
+     //  If Parallel_Output_Addr is non-null, then load into VN has been
+     //  deferred, and is currently residing in LLVM register named
+     //  by Parallel_Output_Addr string.
+
+      if VN in VN_IL.VN_Init_Places then
+         //  Add to list of init places
+         VN_IL.VN_Init_Places[VN] |= Instr_Index
+      else
+         //  Create a new list of init places
+         VN_IL.VN_Init_Places[VN] := [Instr_Index]
+      end if
+
+      //  Update mapping of Parallel_Output_Addrs as appropriate
+      if Parallel_Output_Addr not null then
+         VN_IL.Parallel_Output_Addrs |= [VN => Parallel_Output_Addr]
+      else
+         VN_IL.Parallel_Output_Addrs -= VN
+      end if
+
+   end func VN_Inited_Here
+
+   func Value_Only_In_VN (var VN_IL : VN_IL_Type;
+                        VN : VN_Id; Instr_Index : Code_Index;
+                        Locator : Reflection::Object_Locator) is
+     //  Indicate that only the VN holds the value of the identified memory
+     //  location and hence the VN might need to be flushed
+     //  to that memory cell at some later point.
+
+      if Locator in VN_IL.Local_Values_Held_In_VNs then
+         if Debug then
+            Println("Locator " | Locator |
+                    " contents at " | Instr_Index | " also in VN" | VN)
+         end if
+
+         //  Find entries for post-dominated instructions in locators's mapping
+         ref Mapping_For_Locator => VN_IL.Local_Values_Held_In_VNs[Locator]
+         const To_Be_Removed : Vector<Code_Index> :=
+           [for each [Prior_Index => Prior_VN]
+             of Mapping_For_Locator
+               {VN_IL.Instr_Postdominates(Instr_Index, Prior_Index)}
+                 => Prior_Index]
+
+         if Debug and then |To_Be_Removed| > 0 then
+            Print("Removing from Local_Values_Held_In_VNs[" | Locator | "]:");
+            for each Prior_Index of To_Be_Removed forward loop
+               Print(" " | Prior_Index);
+            end loop
+            Print('\n')
+         end if
+
+         //  Remove them from the mapping
+         for each Prior_Index of To_Be_Removed loop
+            Mapping_For_Locator -= Prior_Index
+         end loop
+
+         //  Now add the new entry
+         Mapping_For_Locator |= [Instr_Index => VN]
+      else
+         if Debug then
+            Println("Locator " | Locator |
+                    " contents at " | Instr_Index | " first in VN" | VN)
+         end if
+         VN_IL.Local_Values_Held_In_VNs[Locator] :=
+           [Instr_Index => VN]
+      end if
+   end func Value_Only_In_VN
+
+   func VN_Name (VN_IL : VN_IL_Type;
+                 VN : VN_Id; Instr_Index : Code_Index) -> Univ_String is
+     //  Return "%vn_" | VN | Suffix where Suffix = "" or "_2", "_3", ...
+     //  depending on which initialization of VN dominates the instruction
+     //  at the given index.  If there is no such initialization, use the
+     //  next sequential index.
+      const Base_Name := "%vn_" | VN
+      if VN not in VN_IL.VN_Init_Places then
+         //  VN hasn't been init'ed anywhere yet, so use the default name.
+         return Base_Name
+      else
+         //  Find which initialization dominates Instr_Index
+         for each [N => Code] of VN_IL.VN_Init_Places[VN] forward loop
+            if VN_IL.Instr_Dominates (Code, Instr_Index) then
+               if N == 1 then
+                  //  First one uses the base name
+                  return Base_Name
+               else
+                  //  later ones have a suffix
+                  return Base_Name | '_' | N
+               end if
+            end if
+         end loop
+         //  None of the existing ones dominate, return the next in sequence
+         return Base_Name | '_' | (|VN_IL.VN_Init_Places[VN]| + 1)
+      end if
+   end func VN_Name
+
+   func VN_Is_Parallel_Output
+           (VN_IL : VN_IL_Type;
+            VN : VN_Id; Instr_Index : Code_Index) -> Boolean is
+     //  Return #true if VN is an output from a parallel operation and has
+     //  not yet been loaded because operation might still be in process.
+      return VN in VN_IL.Parallel_Output_Addrs
+   end func VN_Is_Parallel_Output
+
+   func VN_Parallel_Output_Addr
+           (VN_IL : VN_IL_Type;
+            VN : VN_Id; Instr_Index : Code_Index) -> optional Univ_String is
+     //  For VNs that have not yet been loaded because they are the output
+     //  from a parallel operation, return the name of the LLVM register
+     //  pointing at their contents.
+      if VN in VN_IL.Parallel_Output_Addrs then
+         return VN_IL.Parallel_Output_Addrs[VN]
+      else
+         return null
+      end if
+   end func VN_Parallel_Output_Addr
+
+   func Map_Of_VNs_To_Flush
+     (VN_IL : VN_IL_Type; Instr_Index : Code_Index;
+      B_Or_A : Before_Or_After)
+     -> Result : Map<Reflection::Object_Locator, VN_Id> is
+     //  Return map from Locator to VN for each VN needing to be flushed
+     //  Before/After given instruction is performed
+      Result := []
+      if VN_IL.Might_Need_To_Flush_VNs(Instr_Index, B_Or_A) then
+         for each [Locator => Mapping] of VN_IL.Local_Values_Held_In_VNs loop
+           *Over_Store_Locations*
+            for each [Store_Loc => VN] of Mapping reverse loop 
+               if VN_IL.Instr_Dominates(Store_Loc, Instr_Index) then
+                  //  This is the VN that holds Locator contents now
+                  if Debug then
+                     Println("Store of VN" | VN | " to " | Locator |
+                             " at " | Store_Loc | " dominates " | Instr_Index)
+                  end if
+                  if VN_IL.Need_To_Flush_VN
+                        (Instr_Index, VN, Locator, B_Or_A)
+                  then
+                     //  Found a VN that needs to be flushed
+                     Result |= [Locator => VN]
+                  end if
+                  //  Don't look at other VNs that held locator
+                  exit loop Over_Store_Locations
+               end if
+            end loop Over_Store_Locations
+         end loop
+      end if
+   end func Map_Of_VNs_To_Flush
+
+   func VNs_Flushed_Here
+     (var VN_IL : VN_IL_Type; Instr_Index : Code_Index;
+      VNs_To_Flush : Map<Reflection::Object_Locator, VN_Id>) is
+     //  Mark VNs as having been flushed at given instruction
+      for each [Locator => VN] of VNs_To_Flush loop
+         //  Add to set of places where the VN was flushed
+         if VN in VN_IL.VN_Flush_Places then
+            VN_IL.VN_Flush_Places[VN] |= Instr_Index
+         else
+            VN_IL.VN_Flush_Places[VN] := [Instr_Index]
+         end if
+         if Debug then
+            Println("In " | VN_IL.Op_Ctx.Routine.Name() |
+              " VN" | VN | " " | Locator | " flushed at " | Instr_Index)
+         end if
+      end loop
+   end func VNs_Flushed_Here;
+
+end class PSC::VN_IL_Type

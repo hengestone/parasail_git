@@ -1,0 +1,688 @@
+-- $Revision$ 
+-- $Date$
+
+Thoughts on "region-based" storage management.
+or more specifically:
+  Safe hierarchical dynamic storage management
+  (or safe hierarchical garbage collection?)
+
+  (or Distributed Address Space Hypercomputer - Language = DASH-L)
+
+See also multicore_lang.txt
+
+The basic idea behind region-based storage management
+is that "heap" objects are allocated from regions rather than
+a general heap, and when storage is to be reclaimed,
+the usual unit of reclamation is the entire region,
+rather than individual objects.  
+
+Ada has region-based storage management already, in
+the form of access-type-specific storage collections.
+Cyclone is another language that has region-based
+storage management.
+
+A problem with the Ada approach is that the regions
+are type-based, which is too static.  It implies that
+with a given complex data structure involving internal
+pointers, all those internal pointers will be allocated from the
+same collection.  Alternatively, explicit conversion will
+be used after allocation, which may need to involve
+unchecked conversions (or equivalently ".all'Unchecked_Access")
+to circumvent normal accessibility rules, even when "safe."
+
+Cyclone's regions are also type-based, but it 
+has a somewhat more dynamic capability, because
+it allows the region associated with a pointer to be
+a generic formal parameter.  Of course Ada allows that
+as well, but because instantiation is explicit in Ada,
+whereas it is implicit (a la C++ "<region>" notation),
+it is not practical to use this approach heavily in
+Ada.  Cyclone also introduces the "outlives" relationship
+to allow safe implicit conversions.  This is analogous
+to Ada's accessibility levels.  
+
+What we propose to do is make regions into first class
+objects, where a given "pointer" designates both an
+individual object, as well as the enclosing region.
+In some cases, we may not be concerned with the
+directly enclosing region, but rather the enclosing
+region of some "starting point" object (the "starting
+region"), and simply "know" that the individual object 
+designated by a pointer was "reached" from the starting
+region, potentially following cross-region pointers.
+Furthermore, we propose to allow region objects themselves
+to be first class objects, allowing them to be nested
+within other regions (i.e. we allow for "subregions").  
+Every region has a "root" object, which is where 
+Hence, this might be called "safe hierarchical dynamic
+storage management."
+Access begins when "opening" a region for the first time.
+
+Of course the real challenge is to ensure at compile-time,
+possibly augmented with run-time reference counting,
+that when a region is reclaimed, there are no "live" 
+pointers designating any individual object within the
+region or reachable from the region.  It may also
+be convenient to have the notion of a region being
+"closed", which would imply there are no live pointers
+to its objects.
+
+It might also be desirable to allow reclamation of 
+individual objects (say, when deleting an element from
+a hash table), but we would like this to be safe as
+well.  This implies knowing that there are *no*
+live pointers into the (sub)region, or that all
+of the live pointers are accounted for and none of
+them point at the object being reclaimed.
+This might be equivalent to saying the object is
+"closed" when the deletion occurs.
+
+PASCAL GOT IT RIGHT
+
+It is interesting to think about how Pascal handled heap allocations.
+A heap allocation was not an expression.  Instead "new(P);" was 
+a statement, where you had to identify the pointer that was
+being filled in.  This is similar to the way that unchecked-deallocation
+works in Ada, where you pass in a pointer as an IN-OUT parameter.
+By making this a statement, you have more information about
+what pointer will ultimately designate the newly created object.
+This gives you more chance to associate a storage pool with
+the particular pointer being used, rather than simply the type
+of the access value (in Ada), or worse, the type of the designated
+object (in almost all other languages).
+
+SCENARIOS OF USAGE
+
+Declaration of region
+Creation of region and its "root" object.
+Opening a region/Adding a reference to a region from another region
+ and getting its "root" object.
+Closing a region/Removing a reference to a region from another region
+Destroying a region
+
+Declaration of pointer
+Allocating an individual object in a region
+Assigning to a local pointer
+Passing a pointer as a parameter
+Assigning to a global pointer
+Assigning to a pointer component of region-resident object
+Deletion of an individual object.
+
+"individual" object = "basic" object = "simple" object = "primitive" object.
+
+----------
+
+Let's presume that a typical "container" (e.g. a hash table) has
+an associated (sub)region.  The "root" object would be the 
+"backbone" of the hash table, presumably.  If the hash table
+is to be separately reclaimable, then it needs its own
+"area" (aka "arena").  It might be a local/temporary container, in which case
+it can piggy-back on the local "stack-frame" area.
+If it wants to support individual element reclamation, then
+it needs to be associated with a "reclaimable" area.
+
+Regions can be lexically scoped, single-owning-reference dynamic,
+or multiple-owning-reference dynamic.  Individual objects should
+rarely be both individually reclaimable and multiple-owning-reference 
+dynamic, as that implies too much overhead for an individual object.
+Multiple-owning-reference dynamic implies reference counts if
+the object is going to be individually reclaimed.  If the object
+is only reclaimed as part of a larger object, then having multiple
+owning references doesn't add expense.
+
+If we want to reclaim individual objects, and they have a single
+owning reference, but possibly one or more non-owning/secondary
+references, we would like to be able to have a systematic way
+of finding all of the non-owning references.  Perhaps most
+importantly we want to disallow *returning* a pointer to such
+an object outside of its "abstraction."  So long as the abstraction
+is fully debugged, we can then know there are no other dangling
+secondary pointers.  An access type declared in the private part
+that can't be converted to an externally-visibly access type 
+effectively ensures that in Ada.
+
+If there is a general desire to allocate space for the "internal"
+objects of a data structure from the same pool in which the "root"
+object of a data structure is allocated, there needs some way to
+ensure that that happens.  A natural place to identify the pool
+is by some additional overhead on the root object.  If the "internal" 
+access type declaration somehow identifies the root access type,
+and the allocators for the internal objects can be associated with 
+a root object, then the compiler can determine the pool that way.
+The storage pool would not be an attribute of the access type, but
+some kind of pragma could establish what is the owning/root object in
+any scope where there is an allocator/deallocation.  Similarly,
+when storing a secondary (non-owning) pointer to one object into
+another object, we need proof that the pointer will not outlive
+the designated object, which means that the pool containing the
+pointer has an owning pointer on the pool containing the
+designated object, or is from an inner scope.  An assertion
+such as "outlives(designated obj, pointer)" must be provably true.
+Any time a reference to a designated object is passed as a parameter,
+there is an implicit "outlives(designated obj, callee)".  
+
+"Opening" a data structure is effectively creating a pointer to
+its root object that will keep it from going away, so that all of
+the internal objects that are not separately reclaimable are
+safe to designate.  An open handle on a data structure can be
+declared on the stack, which allows arbitray usage of its internals
+in nested stack frames, or an open handle can exist from one
+data structure to another, enabling the data structure with the
+handle to refer to parts of the other data structure.
+
+Given a pointer to somewhere in a data structure, you can
+get another pointer into the same data structure by following
+a single-ownership link, since the target will live no longer
+than the single owner.  Essentially the goal is to get to
+a new object that lives no longer than some given
+object, since we want to store a pointer *from* the new object
+to some object that lives at least as long as the given object.
+Essentially we need to be able to compare lifetimes,
+and we have various transitive relationships relating
+lifetimes.  But it is a partial ordering in general.
+There are owning, primary pointers, which are counted if there might
+be more than one, and non-owning, uncounted, secondary pointers.
+Secondary pointers always need to rely, directly or indirectly, on 
+some primary pointer to ensure safety.  Primary pointers need to
+"keep track" of all secondary pointers, and make sure they don't
+escape to somewhere that is not "guarded" by a primary pointer.
+
+When a function returns a pointer, it probably needs to be
+associated with some input to the function, to indicate its
+designated object's lifetime, either in terms of being equal 
+in lifetime, or being longer lived, than some input (parameter or global).  
+Returning a pointer to an object that is shorter lived than 
+any input is pretty dangerous, unless it is used before any possible
+object deletions occur.
+
+Various annotations that relate lifetimes of designated objects
+should be adequate, and imply checks that must be performed.
+For a given component of a record, designates-same or 
+designates-longer-lived seem the two relevant choices.  
+When storing a pointer, the fundamental requirement is that the 
+to know that the object containing the pointer lives no longer
+than the designated object.  Also there is owning-designates-same,
+and owning-designates-longer-lived.  "Owning" means that when
+the pointer is nulled out, the designated object can be deleted
+(if designates same) or needs its reference count decremented
+(if designates longer-lived).  An owning pointer is frozen
+while there are non-owning pointers that rely on it.  Only when
+all the non-owning pointers are nulled out or deleted, can
+one safely null out the owning pointer.  A better term for
+an owning pointer that is currently frozen might be "acting
+as a conduit."  A free-standing pointer, as opposed to one that
+is a component of some other object, necessarily needs an annotation
+that identifies it as "designates-same-as-X" or 
+"designates-longer-lived-than-X" where X is some pointer that outlives
+the free-standing pointer.
+
+Owning-designates-longer-lived pointers, since they rely
+on reference counts, might be part of cyclic structures.
+To allow full garbage collection for these, all such pointers
+need to be traceable.  That means that it should be possible
+to find all such pointers starting from the root object.
+In a structure like the AdaMagic in-memory compilation-unit
+cache, this means that the inter-unit dependence links need
+to be gathered in a single place.  The implementor of the
+abstraction could provide a routine to find them all.
+This presumes that there is also a "weak" owning reference from
+the cache itself.  By starting only from "strong" "root" owning
+references (these would presumably be pointers that are not
+inside objects that are potentially part of the cyclic data
+structure), and following all owning references, cycles that
+are only internally referenced or referenced from weak roots
+can be detected and eliminated.    
+
+Of course, it makes sense that all owning pointers that
+designate-longer-lived must be findable, because when
+the object containing the pointer is deleted, you need
+to decrement all the pointers.  Owning-designates-same does
+not have the same issue, because presumably the designated
+object is automatically deleted when the designee is
+deleted, if the associated reclamation "area"/"arena" is deleted.
+
+Of course you must eliminate an entire cycle, 
+not just part of one.  Presuming there are backward
+pointers, it means picking one object and deleting
+it and all objects that refer to it, recursively.
+Backward pointers by themselves are interesting,
+in that they require special handling, not falling
+into the designates-same or designates-longer-lived
+category.  They might be called "slaves" to another
+owning pointer.  They are required to "die" when the
+master linkage is broken.  They must also be findable
+from the object and/or the master linkage to which
+they are a slave.
+
+Non-owning designates-same implies that the designated
+object and the object containing the pointer are both
+part of the same pool, and come and go together.
+
+Owning designates-same might better be called 
+"owning designates-shorter" since the whole point
+is that the object can be separately deleted.
+Similarly, owning designates-longer-lived might
+better be called "owning designates-any" since
+the designated object might outlive the object
+containing the pointer, or might be deleted earlier
+(though clearly the pointer itself must be nulled-out
+sooner than the object goes away).  Be that as it
+may, the lifetime of the "linkage" as opposed to 
+that of the pointer is correctly captured by the
+designates-same/longer-lived terminology.
+
+In some cases it might be useful to distinguish
+write-once vs. mutable.  Write-once is generally 
+implied for designates-same, but exceptions either
+way seem possible.
+
+--------------------------  READ-ONLY Refs ---------
+
+Read-only references similar to how AdaMagic manages
+its program library make a lot of sense in this model.
+Clearly if we are modeling these address spaces as files,
+then having read-only access to a file means it can
+be shared across different processes/ors very easily.
+
+--------------- Simplifying ------------------
+
+Whenever an object is allocated, we need to know what "space"
+it will live in.  It can be on the stack, in which case we need
+to know which stack frame.  It can be in a file, in which case
+we need to have an appropriate handle on the file.  It could
+be in an up-level or global space that is visible to multiple 
+threads, in which case we need to have an appropriate handle on that 
+space.  When calling a function that returns a reference to 
+a newly created object, the caller identifies the space in
+which to allocate the object.  This is quite similar to the
+new Ada2005 ability to have functions return objects of a limited
+type.
+
+Whenever a reference to an existing object is stored in a pointer
+subcomponent of another object, we need to be sure that the 
+designator will not outlast the designated object.  If the designated
+object can be reclaimed separately from the designator, we need to
+be sure that there is some kind of tracked reference keeping the
+designated object from disappearing, or the designator is
+a "slave" that is managed locally with the designated object.
+All slave designators must be nulled out as part of freeing 
+the designated object.  (That is a "programming" problem for the
+implementor, but hopefully it is highly localized.  An example might
+be the "back" pointers in a doubly-linked list.)  Separately reclaimable
+sub-objects can only be designated from outside their managing
+abstraction while the enclosing space is "frozen" -- meaning no further
+deallocations allowed.
+
+What kinds of objects are separately reclaimable?  The internal nodes
+of a tree or hash table which support deletion would want to be reclaimable,
+if only locally.  All the local variables within a given stack frame
+would want to be reclaimable when the corresponding master is
+exited.  An element of a cache such as that used in AdaMagic can be
+reclaimed once all outside references are gone.  What about in a web
+server?  A shopping cart is created when a customer first appears.
+When the customer checks out, or times out, the shopping cart can
+be deleted.  While the customer remains active, the shopping cart 
+can be thought of as the "top-level" object for the customer.
+They may also have separate object in the shopping cart.  These
+might also be seen as independently reclaimable.
+
+There are also objects that might or might not be in main memory,
+though they remain in existence on disk.  In this case, we might
+have a "space" identifier and the offset within the space, and
+the space identifier is always meaningful, while the offset
+is only useful when the space is loaded in main memory.
+
+The notion of a "Move" operation is tricky in this context, in that
+it is changing the enclosing object, and potentially the enclosing
+space.  It clearly becomes more expensive if the operation is shifting
+to a new space, as essentially everything needs to be copied.  This
+is analagous to a "mv" in Unix across file systems.  It may be, however,
+that in most cases, the ultimate target object is known from the
+beginning.  The reason for using Move may be to provide some kind
+of "transaction"-like semantics, preserving the original contents
+until the new contents are fully formed.  In some ways this is
+like having a level of indirection, with the contents being moved
+being separate (sub-)spaces.
+
+--------------- looking at it dynamically instead of statically ---------
+
+Imagine an object can be "extended," by allocating space for
+additional components dynamically.  If the object can be
+individually reclaimed, then it needs to keep a list of
+its extensions, or of memory blocks devoted to holding
+its extensions, so they can all be freed when the
+extensible object is freed.  We also need a "master" object
+from which to get more memory to use for extensions.  
+
+If a reclaimable object expects only a small number of extensions,
+then it makes sense to just have a list of them and
+allocate from the enclosing master.  If it
+expects a large number of extensions, then it makes sense
+to have its own storage pool, requiring only a list of
+blocks rather than of individual objects.  One down side
+of this is that it needs to be walked when the
+enclosing storage pool is freed, presuming the blocks in this
+more local pool are not listed in the enclosing pool.
+Effectively this means that a reclaimable object with
+its own pool needs finalization, even if neither the object 
+nor its extensions need finalization.
+
+So a reclaimable object needs either a list of individual
+extensions, or a list of blocks if it has its own storage pool.
+It also has to keep a list of extensions needing finalization.
+Any object that has its own storage pool needs finalization,
+to make sure the blocks get reclaimed, since we presume an 
+allocated block is on exactly one list.
+
+A storage pool is something that handles allocations locally,
+by acquiring blocks of free space and carving them up.  The
+blocks are acquired from some enclosing "address space" or "file."
+
+The layout of such an object might look like this:
+
+     size if not given a whole page/starting free offset if is a whole page
+     ptr to master object
+     list of extension pages/sub-pages
+     free list of pages/sub-pages
+     data of object ...
+
+Such an object can be "cleared" easily, by restoring its
+data to an initial state and releasing all of the extensions.
+An extension might be a whole memory page, or just a part of 
+a page.  If an extension might be less than a whole page, it 
+probably needs a size preceding it.  
+Clearing an object presumes that there are no remaining
+pointers into its extensions from outside the object.
+
+The content of such an object can be "moved" to another (target) 
+object so long as the target object points to the same master, 
+either directly or indirectly.  Essentially the target must have 
+a shorter lifetime than the original source object, so when the source's
+master goes away, the target will go away as well.
+The move involves clearing the target, and then moving the
+extensions, updating the target to be a copy of the source,
+possibly with pointers adjusted if they referred to components 
+in the same page as the source object, as opposed to in an
+extension page.
+
+The object can be "released" by releasing the object
+and all of its extensions, and nulling out any pointers
+to it.  When released, the object can be linked 
+onto a free list of its master, with the space for the 
+link taken from the object itself.
+
+An object that can be released individually needs to keep 
+track of all pointers from outside the object that designate
+the object or one of its subcomponents or extensions.
+If we consider such an object a "master" then we need to
+keep track of external masters that are allowed to reference
+into it, or keep track of individual pointers that need
+to be nulled out.  If there is exactly one pointer that
+might reference it, or the pointers are all "local" (like
+back pointers in a doubly-linked list), then the "abstraction"
+can be presumed to know how to find these pointers given
+the primary pointer to the object and the object itself.
+The deletion and the local pointer updates are logically 
+locked together inside the abstraction.
+
+In other cases we may have "peer" masters with pointers 
+into each other.  In this case we presume that the
+masters have tracked references to each other, which
+may imply lists of references, or counts, or both.
+"Peer" masters are two masters that are themselves
+submasters of the same master.  The advantage of
+lists rather than simply counts is that cyclic
+dependences won't interfere with reclamation.
+This presumes there are "weak" references from the
+enclosing structure.
+
+When walking a structure, we need to know that some
+"master" is protecting the walk, so it won't disappear.
+The notion of "opening" makes sense here.
+
+A pointer can be one of have various kinds, distinguished by
+various characteristics:
+  - whether it can point into a different address space;
+  - whether on "activation" it is automatically followed,
+    with the designated object also activated, or instead
+    the designated object can be activated at a later point.
+  - whether it is:
+       - the primary pointer,
+       - a "local" secondary pointer,
+       - a possibly "remote" secondary pointer.
+  - whether the target is: 
+       - independently reclaimable, 
+            - whether this is a "strong" primary pointer
+            - whether this is a "weak" primary pointer
+            - whether this is a tracked secondary pointer.
+       - dependent on some enclosing object, and once created remains that
+         enclosing object is reset or released;  
+            - how many levels up from the pointer is the object with a 
+              tracked pointer that is keeping the target's enclosing object
+              from being reset/released.
+      
+  - whether the target has its own storage pool, or
+    instead has room for any extensions allocated from
+    an enclosing storage pool;
+
+-------- applying this to an "incremental" inspector ------------
+
+Local, temporary data structures should use the immediately
+enclosing stack-frame storage pool.  Extension objects used
+to construct mappings and sets should not be externally
+designatable, and any pointers to them beyond the primary
+pointer should be local "slave" pointers.
+
+We have various lifetimes:
+  1) within one phase on one procedure
+  2) across phases on one procedure
+  3) within one module
+  4) within one batch of modules, needed until
+     the batch stabilizes
+  5) needed to support calls from other modules,
+     possibly in later batches, but in same partition
+  6) needed to support calls from other partitions
+
+The kinds of things that are designated by other than their
+"primary" pointer are:
+  1) SCIL node (name resolved to obj_decl, etc.)
+  2) Source info (shared, passed around)
+  3) obj-id/expr-id, localized to module
+  4) value number, temporary VNs are effectively garbage collected,
+     permanent VNs are what is left.
+  5) numeric sets, VN sets, possible value sets
+  6) known value sets
+  7) obj-id sets, unique obj-id sets
+  8) locally, components of kappa VN, append only
+  9) messages
+  10) spellings
+  11) basic_block_id (array indices can "dangle" as well)
+
+The independently reclaimable object
+
+------- transactions, file-based persistence, and multiple addr spaces --------
+
+We have talked above about multiple address spaces,
+some of which are persistent and associated with files.  
+A file and/or an address space is kind of a top-level master.
+Moving between address spaces/files always involves some 
+copying, though conceivably in-memory pages of a file could 
+be moved from one file to another without physically
+duplicating them in memory.
+
+Transactions are relevant here, and are related to opening
+a file, or a master.  Gaining exclusive access, perhaps 
+using the SQLite notion of having a "waiting" writer
+to prevent starvation by continuous readers, makes sense,
+whether to a whole file, or to simply a "master" within
+the file.  The idea of rollback seems somewhat separable,
+and probably should be a "programming" problem.  As a side
+effect of updating an object, it may make sense to preserve
+something that allows the pre-update state to be restored.
+For nested transactions, it isn't necessary to support
+persistent rollback, since if there is a "catastrophic"
+failure of an entire process, the outermost transaction
+would be rolled back.  Nested transactions can be managed
+strictly internally (though the space requirements might
+eventually argue for going to disk, but without the expense
+of "sync"ing associated with outermost transactions).
+
+We need to distinguish nested transactions, where there is
+an outer transaction providing the ultimate protection against
+catastrophic abort, from transactions on less than the whole
+file, where you still want the persistent rollback, but it
+is just part of the file that is locked at any given time.
+It could get tricky when you have concurrent transactions
+and the associated masters share the same physical page.
+Clearly then you need to have fallbacks at a granularity
+matching the granularity of the master being locked.
+
+------------- a real package ---------------
+
+We could design a "real" package or two that provided something
+like the above capability.  It would seem to be of interest.
+Transactions, persistence, safe automatic reclamation with extensible
+objects, etc.
+
+Given a designated type, we want to be able to create
+a pseudo-access type which can be used in a persistent
+data structure.  Probably the pseudo-access type should be 
+declared private along with the designated type, and then
+a separate generic would link them together.  We probably
+need a "real" access type to actually use the type, though 
+perhaps that would be declared locally as a side effect of 
+opening the object.  Alternatively, we declare a generic
+that takes an object IN OUT or ACCESS.
+
+Another approach would be the "visitor" approach, where
+given a pseudo-access type, and a visitor object, we apply
+some operation and we end up with an IN OUT or ACCESS
+parameter passed in.  The generic seems simpler:
+
+    declare
+        procedure Process(X : in out Desig_Obj) is
+        begin
+            fiddle with X ...
+        end Process;
+        package Do_It is new Desig_Obj_Process(Ptr_To_DO, Process);
+
+Or always rename the result of some conversion to access type
+    X : Desig_Obj renames Desig_Obj_Deref(Ptr_To_DO).all;
+
+Or perhaps an access discriminant could be used, though since these
+are only allowed on limited types in Ada 95 that could be painful.
+But you can return limited types by reference in Ada 95, so you
+could rename the result.  It would want to be controlled so it
+could be reused/released when done, though beware of when 
+finalization happens.  This might be an argument for implementing
+either non-limited types with access discriminants, or limited
+return (the former seems a *lot* easier).
+
+Actually, in Ada 95, the right solution is to make the designated
+type limited, and then return it by reference, renaming the result.
+Ah, but then it is read only.  But we could return a limited
+object with an access discriminant denoting the object.  This 
+would probably want to be a component of the object itself,
+so it doesn't need to be separately allocated (but that is not
+an easy thing to be written to disk).  Ada 2005 
+clearly provides a better solution here, since we can return
+an object with an access discriminant of either access constant
+or access-to-variable.  
+
+There is also an issue if the "pseudo-access" values are
+relative to the file in which they live.  If so, then we need
+to make them absolute somehow.  The deref operation perhaps 
+needs some way of telling what file the object came from,
+so it can be interpreted properly.
+
+Alternatively, we could provide accessors for all components,
+like "Diana" or GNAT's AST.  That's a bit of a pain.
+
+Offbeat question: Can we use stream attributes to produce
+automatic pointer "swizzling" operations?
+What about tags?  These are difficult to read/write as well.
+Perhaps stream attributes and 'External_Tag could be used
+here.  
+
+If we make the pseudo-access values use file-relative offsets
+that are in 8-byte units, then we get 3 more bits.  This might
+allow 32 bits to be adequate.  With this approach, the lower 8
+bits of the pseudo-access value (PAV) could be used as a page
+offset, while still having 2K bytes/page.  We could use the
+high 16 bits to select both the file and the page "group".
+The third 8 bits would select the page within the page group.
+This way most files would be presumed no greater than 2**(16+3) = 0.5Meg,
+but could grow beyond that, with potentially discontiguous
+PAVs.
+
+If we use a generic to declare a PAV of a particular type,
+and then a nested generic to create the association between
+the PAV and its designated type, we would get pretty good
+abstraction.  We could check that the nested generic is 
+instantiated only once.  The nested generic could 
+declare a new type and give it an external tag, but 
+that isn't inherited even by a type with a null extension,
+so that doesn't really solve the problem.  Perhaps the 
+outer generic could provide a value for the external tag
+to be specified when the designated type is defined.
+The PAV probably wants to represent "access Desig'Class,"
+though there could be two different types, or simply
+different Deref routines for "access Desig" and
+"access Desig'Class."
+
+If we use streaming in general to convert between the disk
+representation and the usable, in-memory representation,
+the stream might need to provide an operation
+that identifies the location of the object being
+converted so appropriate translations of file-relative
+pointers can be performed.  There is an open question
+whether 'Read does a recursive 'Read on all of the "extensions" of
+an object, while just converting "secondary" pointers into
+a position-independent "global" address.  This implies
+that secondary pointers and primary pointers are
+different types, so they can have different 'Read/'Write
+operations.  Furthermore, a pointer to an extension (that is not
+itself a master) might have a different in-memory representation,
+and for example might be pre-converted to an access value,
+requiring that the extension be in memory if the base object
+is, while secondary pointers might remain as PAVs, as
+might pointers to extensions that are themselves masters.
+
+Checks for dangling references, etc., might be done as part
+of converting to the on-disk representation (i.e., in 'Write).
+
+------------- definition of safe vs. dangling reference ----------
+
+A reference is "safe" if it designates an object with 
+a master that is an ancestor of the designator.  This ensures
+that if the designated object's master goes away,
+so does the designator.  
+
+It is also safe if the master is "pinned" by an ancestor of the
+designator.  When a master is pinned, it can't be freed or finalized
+or have components reclaimed.  It can be extended, but not shrunk.
+
+When an object is to be shrunk (i.e., reclaim some of its
+extensions), how far up the master hierarchy does it need
+to check for being "pinned"?  If an object's extensions
+are not externally referencable, then reclaiming them is
+not an issue.  If an object's extensions are externally referencable
+and reclaimable, then probably the object itself needs to
+be a master, and needs to be pinned.  On the other hand,
+if we presume a separate "opening" step, where the intent
+to "shrink" or "designate" is specified (where the two are
+clearly not compatible), then it would be relatively
+straightforward to look up the master chain, or require
+an open handle of some sort on the object's master to perform an 
+open on the object.
+and the object
+
+----------- interesting example ----------
+
+In AdaMagic, we have an abstraction called the "string list"
+(string_list.h/c).  When a string list is created, a new
+heap is allocated, and when the string list is disposed,
+the heap is returned.  It also uses malloc/free for
+extra-large strings (bigger than a page), and for
+the "backbone" of the table.  This makes some sense
+because the backbone needs to grow but stay contiguous.

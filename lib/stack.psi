@@ -1,0 +1,20 @@
+
+interface PSL::Core::Stack<Element_Type is Assignable<>> 
+  implements Indexable<Element_Type, Univ_Integer> is
+  // Stack implemented on top of an Extendable Stack,
+  // indexed by Univ_Integer, 0..Depth-1, [0] = top of stack
+    op "[]"() -> Stack
+    op "indexing"(ref S : Stack; Index : Univ_Integer) -> 
+      ref Element_Type
+    op "index_set"(S : Stack) -> Countable_Range<Univ_Integer>
+    func Bounds(S : Stack) -> Countable_Range<Univ_Integer> is "index_set"
+    func Push(var S : Stack; Elem : Element_Type)
+    op "|="(var S : Stack; Elem : Element_Type) is Push
+    op "<|="(var S : Stack; var Elem : optional Element_Type)
+    func Pop(var S : Stack) -> Element_Type
+    func Pop(var S : Stack)  //  Ignore result of pop
+    func Top(ref S : Stack) -> ref Element_Type is (S[0])
+    func Depth(S : Stack) -> Univ_Integer
+    func Is_Empty(S : Stack) -> Boolean
+    op "magnitude"(Stack) -> Univ_Integer is Depth
+end interface PSL::Core::Stack

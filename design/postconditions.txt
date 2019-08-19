@@ -1,0 +1,86 @@
+----  6-Jan-2019  ----
+
+We are currently inlining using the type where an operation is declared,
+even if it is defined by equivalence to another operation in a different
+module, with a different type descriptor.  This shows up when calling the ".."
+operation of Univ_Integer.  When we decide to inline we need to untangle
+this, or do so earlier when we generate the PSVM Call instruction.
+This is currently causing the LLVM compiler to die when compiling
+Countable_Set."/" at line 4789 in aaa.psi.
+
+----  4-Jan-2019  ----
+Interval class shows examples where a precondition is
+written outside the parens of a func, so it is presumed
+to be a postcondition.  We should move such a postcondition to be
+a precondition, if the precondition is null.
+
+If we are not doing run-time checks, then can suppress generating
+code for nested blocks used by Check_Nested_Block_Op.
+
+Changing precondition on spec didn't get detected for Push.
+
+Putting {Length >= 0} on Vector::Create param causes problem in code gen,
+because it is referring to the spec rather than the body Length param.
+
+We still have a tbd:stt in dynamic (and static) relating to
+using Underlying_Sem_Info on identifiers.
+
+----  3-Jan-2019  ----
+Need to find the expressions that need entry-temps,
+assign them locations, and initialize them.
+We can do this as a separate set of routines.
+Later, when we walk postconditions, we should notice
+the use of an entry temp and *not* continue evaluation,
+but rather load the entry temp.
+
+Claim: Something that needs an entry temp would never contain
+another expression that needs one.  You need an entry temp when
+the expression contains the entry-value of a variable, and it is
+being combined with something that cannot be evaluated until the end.
+The overall expression will be something that cannot be evaluated until
+the end, so it could never be part of an entry temp.
+------- 
+Postconditions are a bit of a challenge because we need to extract the
+equivalent of 'Old.  We can walk the expression tree, and look for parts
+that need to be evaluated on entry.  Ideally we want to stop at a place which
+produces a "small" object, since we are going to have to make a copy.
+Something needs to be evaluated on entry if it involves a "var" parameter
+(or uplevel) without the "Updated_Value" operation applied to it.  
+Things that *cannot* be evaluated on entry are those that involve an output, 
+or an Updated_Value operation applied to a var.
+
+So, given a tree, we want to produce a list of on-entry-temps, and a mapping
+or annotation on the original tree that identifies which on-entry-temp
+to use at appropriate places in the tree.  Operand_Semantic_Info should
+be usable for such tree elements.  We may want to add some components:
+ * On-Entry-Temp info
+   * Index/Location for temp object
+   * Next on-entry-temp (or incorporate into a list or a hash-table)
+
+On-entry temps should be associated with an operation.
+Cg_Visitor or Pre_Cg_Visitor should be used for this.
+Probably Pre_Cg since we want to collect all of the temps needed.
+At a minimum we need to know how many such temps are needed.
+Except it is actually not that big a deal, since we can walk the
+postconditions in advance, or multiple times.  Still, it might
+be nice to make the Pre_Cg walk do some of the work.
+   
+At some point we will support {Pre => ...} and {Post => ...}
+We need to setup an expectation of pre vs. post, with warn or error
+if not a pre/post.
+
+
+---------
+* Fix pre/postconditions
+    * Preconditions and Postconditions lists of Operation are never being analyzed
+        * These are just a list of expression trees.  Probably should be bundled into an annotation to ease processing, which can be empty
+    * Param_Decls of Inputs and Outputs of Operation are not being processed during Pre_CG pass
+    * We have four nested blocks, for internal/external pre/post.  We are only using the internal-pre one right now, for the dequeue condition.
+    * Currently we convert an annotation into a nested block + a Check_Nested_Block opcode, and we convert a dequeue condition into a nested block with a "Skip_Op" as the Instr_Opcode meaning we want a nested block, but not a call on it.  Clearly pre/postconditions should use the Skip_Op, and all parameter annotations should all be combined into the pre/postconditions lists.  We should use the external preconditions/postconditions list for things declared with the operation.  We could use an internal precondition/postcondition for a type invariant, conceivably, though it is a bit annoying that the relevant parameter would vary from one to the next.  Probably an invariant should take a parameter which is the object.  Does a dequeue condition take that as well, or is it merely nested?
+    * Will want to inline pre/postconditions in almost all cases
+        * (external) preconditions at the call site
+            * Should be able to inline assertions more generally, and assertions shouldn't prevent inlining the enclosing routine.  Actually, an assertion in an inline will need to be inlined, so its size should be added in (probably after subtracting something for easy-to-remove overhead) unless checks are suppressed.
+            * When suppressing checks, could also suppress the corresponding nested block.
+        * postconditions and invariants at the end of the operation code
+        * but *not* dequeue conditions (aka internal preconditions) because they are used as part of dispatching (external preconditions might also be re-evaluated in case they look at internal state, when an operation is converted to concurrent.
+

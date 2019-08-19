@@ -1,0 +1,33 @@
+We are trying to improve performance.  One area of inefficiency is
+in storage allocation/deallocation of large objects with multiple
+parts.  It seems reasonable to create versions of copy large object and
+release large object that only get the region lock once, rather than
+repeatedly.  We should make sure we are not dealing with a null (or other
+special object) before getting the lock.  Similarly, if there are
+multiple chunks to be released, they should be done with a single
+lock on the enclosing stg rgn.
+
+Perhaps there should be a fully empty chunk list that is exclusive to each
+server, and that is where chunks are usually borrowed and returned.
+Perhaps we only borrow chunks from an enclosing region if we are the
+owning server.  Otherwise, we borrow from the completely empty list
+for the current server.  The chunk will be returned to the enclosing
+stg region of the owning server eventually, so this can cause chunk
+migration, and potentially an overall waste of storage.  Perhaps
+we need to limit the imbalance, and periodically return a bunch of empty
+chunks to a global list.  But the upside is that no locking is ever needed
+for chunk manipulations.
+
+Check_Is_Large should be an inlined wrapper with an "if Debugging then ..."
+
+Another interesting question is whether we can identify regions that
+never have multiple picothreads referencing them.  To be visible to
+multiple regions, either there must be a "var" parameter or an "output"
+or an up-level variable in the region visible to a parallel call or block.
+If we only set the "multi-access" flag on a region from the owning server when
+it becomes accessible to other threads, then we don't need to synchronize the
+access to the flag itself.  Presuming once the flag is set it stays set, until
+we are back in the owning server and all other users are completed.
+
+Resetting it is hard, because we don't know we are truly the last user, so
+better to leave it set, probably.

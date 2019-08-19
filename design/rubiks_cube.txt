@@ -1,0 +1,105 @@
+
+Rubik's cube solution
+
+6 faces, each face has 9 facelets.  Operation is to rotate
+one face some number of multiples of 90 degrees
+Given an arbitrary starting point, the goal is to return the cube
+to a state where each face is all the same color.
+The center facelet never moves.
+//
+Need an abstraction to represent the state of a cube and the 
+operations on it.
+The state could be represented by the location of each corner and
+each facelet.
+The center facelet of each face never moves, and to some extent
+defines the official "color" of the face.
+
+To "solve" a cube we can systematically try all rotations.  We don't
+want to revisit the same state more than once, so this is very
+much like the breadth-first search.  Since we are interested in the
+shortest solution, breadth-first makes sense.
+
+The operations of rotating a face is a member of a group.
+The state of a rubiks cube can be represented as a vector,
+where the value in a given element of the vector indicates which
+facelet is in that location.
+If we number the facelets on each face as follows:
+//
+0 1 2
+7 x 3
+6 5 4
+//
+and give a number to each face, it will be 6 x 8 distinct facelets
+and 6 x 8 places, so we have vectors of length 48, each storing
+a value in the range 0-47.
+//
+The matrices are 48 x 48, and consist of 1's to indicate where
+they move each facelet.  We could represent each row by 48 bits,
+or equivalently a single univ-integer.  So a vector/array of 48
+univ-integers could be the representation of a matrix.
+We would like an implementation of matrix multiplication so that
+we could efficiently combine rotations without having a specific
+rubiks cube state vector.  There are only 6 primitive rotations.
+These can generate all of the other "legal" transformations.  We want to
+remember the sequence of primitive rotations used to produce a given
+state.  That comes down to remembering a sequence of values in the
+range 0-5.
+
+It would be nice if we could evaluate two states to determine 
+whether one is "closer" to the final solution than the other.
+This could be done by training, perhaps, to take each state
+and come up with a formula for determining how far it is away
+from a solution.  If we systematically generated all solutions
+that were one step away, and then from there looked for all that
+were two steps away, and so on, making sure we associate the smallest
+step count with any given state, then we will have good training data.
+
+---------
+
+2x2 rubiks cube
+
+If we number the cubes 1,2,3,4 clockwise on one side, and then turn it over
+and number the opposite cubes 5,6,7,8 also clockwise, then we can describe
+transformations associated with a single clockwise turn on each of the 
+six sides:
+
+A: 1->2->3->4->1
+B: 5->6->7->8->5
+C: 3->2->5->8->3
+D: 2->1->6->5->2
+E: 4->3->8->7->4
+F: 1->4->7->6->1
+
+An 8x8 matrix can be used to represent each of these rotations
+A: 0 0 0 1 0 0 0 0    1     4
+   1 0 0 0 0 0 0 0    2     1
+   0 1 0 0 0 0 0 0    3     2
+   0 0 1 0 0 0 0 0  x 4  =  3
+   0 0 0 0 1 0 0 0    5     5
+   0 0 0 0 0 1 0 0    6     6
+   0 0 0 0 0 0 1 0    7     7
+   0 0 0 0 0 0 0 1    8     8
+
+Matrix multiplication can be used to combine transformations.
+The result of multiple transformations can be represented by the
+matrix product of the individual transformations.  Alternatively it
+can be represented by the result produced by taking the product and
+applying it to a unperturbed vector, to produce a perturbed vector.
+
+If we log the sequence of transformations that produce various results,
+and keep track of the shotest such transformation sequence, we should
+be able to take any given state, and figure out the shortest way to
+get back to the pristince state.  There are 5040 states if you ignore
+the eight ways that a given state can be represented, or 8 x 5040 if
+you don't make that optimization.  If for every state we record the
+shortest sequence, then we should be able to solve any state.
+
+Of course there are probably better ways to do this, but this is
+one possible brute-force approach.
+
+We will want some way to save the database, and then read it back in,
+so we don't lose all of the work, and can pick up where we left off.
+So if we represent the sequence using a string of A-Fs, and we represent
+the states via the result of the transformation applied to a pristine
+vector, our database would be a mapping from state vector to transformation
+sequence.

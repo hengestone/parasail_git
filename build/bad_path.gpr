@@ -1,0 +1,21 @@
+project Bad_Path is
+
+   for Object_Dir use "obj";
+   for Exec_Dir use "..";
+   for Source_Dirs use ("../bad_path");
+   for Main use ("bad_path.adb");
+
+   package Builder is
+      for Default_Switches ("ada") use ("-s", "-g", "-k");
+   end Builder;
+
+   package Compiler is
+      for Default_Switches ("ada") use ("-gnatE", "-fstack-check",
+        "-g", "-gnata", "-gnat95", "-gnatU");
+   end Compiler;
+
+   package Linker is
+      for Default_Switches ("ada") use ("-g");
+   end Linker;
+
+end Bad_Path;

@@ -1,0 +1,22 @@
+project Compiled_Main_With_Interp is
+
+   for Object_Dir use "obj";
+   -- for Exec_Dir use "..";
+   for Source_Dirs use ("../parser", "../parser/gen", "../semantics",
+     "../interpreter");
+   for Main use ("compiled_main_with_interp.adb");
+
+   package Builder is
+      for Default_Switches ("ada") use ("-s", "-g", "-k");
+   end Builder;
+
+   package Compiler is
+      for Default_Switches ("ada") use ("-gnatE", "-fstack-check",
+        "-g", "-gnata", "-gnat95", "-gnatU");
+   end Compiler;
+
+   package Linker is
+      for Default_Switches ("ada") use ("-g", "-L/usr/lib", "-L.", "-ltermcap");
+   end Linker;
+
+end Compiled_Main_With_Interp;

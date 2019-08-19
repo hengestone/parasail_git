@@ -1,0 +1,123 @@
+-- $Revision$ $Date$
+
+DASH-L = Distributed Address Space Hypercomputer - Language
+
+Using Sun's Grid as an example, and how we might use it
+for the Inspector, each partition runs on a separate machine.
+They use the file system for communication, and perhaps
+something like SQLite.
+
+Clearly you would like coherent caches if two CPUs are
+manipulating data in the same address space concurrently.
+
+Each  address space would probably want to use addressing
+that is base-relative, rather than requiring they each get
+a unique address, essentially treating an address space like a file.
+These "files" might like to support the notion of transactions
+if simultaneously accessible to multiple processes/threads
+(see description of how sqlite works when multiple processes
+access a single sqlite database file).
+
+Interesting characteristics:
+
+    multiple regions, region treated like a file (open/close,
+    file-relative addressing, etc.), transactions,
+    per-thread data readily available, or alternatively
+    context passed down to each call,
+    static analysis and type-based annotations (extra attributes
+    like taintedness), compile-time computation, global-free programming, 
+    user-defined control structures, conditional declarations, etc.
+    scripting syntax option, easy-to-teach
+-----------------------
+
+The world seems to be heading toward multi-core architectures.
+Does the Inspector have something to contribute here?  And
+what about languages for multicore architectures?  Does SofCheck
+have something to contribute more widely to this ongoing debate?
+
+One clear question is whether these multiple cores share memory.
+Since they are all on the same chip, having separate large memories for
+each seems of little advantage.  However, clearly there will likely 
+be separate caches for each core, and perhaps some amount of
+local memory.
+
+As a thought experiment, take a complex application like the
+Inspector itself.  Can this be mapped onto a multi-core target?
+Because it is an iterative algorithm, and there is a lot of
+data to be processed, it should be possible to construct the
+algorithm as a lot of separate tasks that can run in parallel,
+subject to various order dependencies.  Of course, then the
+problem becomes synchronizing access to the shared data structures.
+Alternative approaches involve passing around capabilities/exclusive
+references a la Hermes to ensure that only one thread has access
+at a given time.
+
+One of the articles I read recently talked about objects having
+both a type and a "place."  The idea of region-based storage
+management seems closely linked.  One concept is that the code
+goes to the data, rather than the data being passed around.
+Using a region-based storage approach seems quite important,
+so that you don't end up with little bits of a large composite object 
+scattered across separate address spaces.
+
+This has some relation to the idea of functions returning limited
+types in Ada 2005.  The object is "built in place" and then never
+moved.  The caller provides enough information to the called routine
+for it to know where to create the object.  "Co-extensions" are the
+beginnings of region-based storage, in that the coextensions live in
+the same storage pool as the object designating them.
+
+----------------------
+
+Other thoughts on distributed memory and/or region-based storage management:
+
+If we treat a region as a run-time object (analagous to Inspector's
+subpools), then a pointer has an associated region object, and as long
+as the region object exists, the pointer is valid.  The region object
+may have (counted) references to other region objects, which makes
+certain that these other region objects may exist, and that it is
+safe to have pointers "inside" the referring region object that
+point to objects in the referenced region object.  A region object
+or a pointer associated with it can be passed as a parameter
+in a procedure call only if the region object is guaranteed to 
+outlast the call.  That means it is somehow "pinned" in memory.  If the
+region objects are in some kind of cache or table, we would want
+an operation that would effectively find and pin down the region object,
+
+You don't really need to pass around the region object if you have
+a pointer that you know is associated with a "pinned" region object.
+You need to know about region objects when you start storing pointers 
+into long-lived places, or you want to allocate or free an object.
+
+If you store one pointer into an object pointed-to by a second
+pointer, then you need to know that the region object containing
+the object designated by the second pointer can safely refer to 
+the region identified by the first pointer.  This is different
+from the issue of simply following pointers from one region to
+another for reading.  This implies a need to distinguish access-to-constant
+vs. access-to-variable, at least as far as storing into pointer
+components.  It is safe to follow inter-region pointers when
+dealing with access-to-constant, but not when dealing with
+access-to-variable.  There would need to be a way to identify
+components that are exclusively used for intra-region pointers.
+This is not quite as restrictive as the notion of an "owning"
+pointer, but it is close.  Clearly "owning" (aka "primary")
+pointers are exclusively intra-region.
+
+See region_based_storage.txt for more on this topic.
+
+---------
+
+Fran Allen's Turing lecture
+
+High-level Data-centric, partition the data, move the data,
+higher-level objects.  Get into the "game" now, establish
+the programming model, to help determine how is memory shared,
+how do cores communicate, etc.  *Not* currently being driven
+by languages or compilers.
+
+Footnote on the data centric language, at HIPO conference, mention 
+of ZPL, from Univ. of Wisconsin (?), Larry Snyder.  This a data-centric
+language.
+
+----------

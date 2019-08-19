@@ -1,0 +1,6 @@
+Qualified names are creating a problem in substitute_tree.  The problem is that the resolved interpretation on the "id" part of the qualified name is itself a
+qualified name.  We want to change the sem info and create a new qualified
+name.  The sem info on the qualified name as a whole should be the
+same as that on the id.  Recursing on the "id" would make sense if it
+was an ID, but since it "looks" like a qualified name, we end up in infinite
+recursion if we are not careful.

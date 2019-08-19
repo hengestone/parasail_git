@@ -1,0 +1,4 @@
+Pi = 3.14159265358979, True prints as #true
+X = "hello", Y = "there", Z = 42
+Give me somethin: ParaSail
+You gave me: "ParaSail"

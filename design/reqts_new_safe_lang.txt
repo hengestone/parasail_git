@@ -1,0 +1,80 @@
+-- $Revision$ $Date$
+
+Thoughts on the design of a new language for
+developing certifiably safe and/or secure software.
+
+See also multicore_lang.txt for thoughts on languages
+specifically aimed at distributed, multi-threaded,
+multi-address-space platforms.
+
+--------
+
+People to get involved with the design:
+
+  1) SPARK folks   (Rod, Peter)
+  2) AdaCore folks (especially Bob and Cyrille)
+  3) VeroCel folks (George Romanski et al)
+  4) Greg Morrisett from Harvard ("cyclone" as a starting point?)
+  5) John Knight from Virginia (knight@cs.virginia.edu)
+  6) FAA folks
+  7) MISRA C folks, especially from auto industry
+  8) JSF-C++ folks
+  9) Microsoft?
+ 10) Sun?
+ 11) Lockheed Martin, Boeing, BAe, Airbus (EADS), Alstom, ...
+
+---------
+
+Criteria for language:
+
+  1) Designed to ease certification
+  2) Translatable from SPARK and MISRA C/C++ and other "safe"
+     C/C++ subsets (e.g. JSF), and perhaps RT Java and/or SC Java.
+  3) Compilable back into SPARK and/or C and/or Java.
+  4) Supportive of additional static analysis tools.
+  5) Standard IR representation(s) (high level and "C" level?) suitable
+     for static analysis.
+  6) Open source front end to generate standard IR, and
+     open source IR translator to C/Java.
+  7) Supportive of restricted-resource targets (small memory,
+     low power, single CPU, no floating-point hardware, etc.)
+  8) Doesn't rely on garbage collector, yet supports safe (region-based)
+     dynamically allocated data structures rather than only arrays.
+  9) Has safe multi-threading model, and safe multi-address space model.
+ 10) Subsettable, or organized as language "layers" or language "modules"
+
+-------------------------------
+
+Language features:
+
+- Doesn't confuse information hiding (i.e. module encapsulation,
+  abstraction, isolation of algorithms and data structure details) 
+  with data access control and synchronization and and 
+  storage/persistence management (i.e. object encapsulation)
+
+- Is attribute based, where attributes can be used in pre/postconditions,
+  not based on run-time value, don't need to exist at run-time, have
+  user-specified propagation rules (e.g. taint), can be propagated across
+  calls, can be associated with constructs (e.g. min/avg/max time,
+  min/avg/max stack space) typically to represent resources, or can
+  be associated with data, to represent characteristics of value, of
+  integrity (taint), security, etc.
+
+- Makes it easy to define iterators, and other constructs that
+  intersperse a user-defined control structure with the sequence
+  of statements it controls -- essentially an anonymous lambda
+  construct.  This could be done by template expansion where one
+  (or a group) of the "parameters" is a (parameterized) sequence
+  of statements.
+
+- Isn't "religious" about syntax, having potentially both a "C"-like
+  and a "Pascal"-like syntactic representation.  However, in the "C"
+  like syntax, a single statement and a sequence of statements should
+  not be interchangeable syntactically, to avoid the well-known
+  dangers of missing or additional semicolons and maintenance headaches.
+  Probably require {} around any control-structure element.
+
+- Multi-threaded, supporting map/reduce paradigm.
+
+- Stack based extensible objects; region-based storage mgmt,
+  returning extensible objects, etc.

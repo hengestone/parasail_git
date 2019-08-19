@@ -1,0 +1,155 @@
+Count = 2
+Mapping #jelly => peanut butter
+#jelly in M = #true
+Mapping #hotdog => mustard
+#hotdog in M = #true
+#xy in M = #false
+Count after deletion = 1
+Mapping #hotdog => mustard
+Count after addition = 2
+Mapping #jelly => a new value
+Mapping #hotdog => mustard
+Count after replacement = 2
+Mapping #jelly => a third value
+Mapping #hotdog => mustard
+Count after deletion = 1
+Mapping #jelly => a third value
+Adding 100 random pairings to Map.
+Map is now of count = 62
+Mapping 0 => 86
+MUI[0] = 86
+Mapping 64 => 55
+MUI[64] = 55
+Mapping 96 => 17
+MUI[96] = 17
+Mapping 31 => 45
+MUI[31] = 45
+Mapping 63 => 26
+MUI[63] = 26
+Mapping 97 => 7
+MUI[97] = 7
+Mapping 94 => 78
+MUI[94] = 78
+Mapping 30 => 75
+MUI[30] = 75
+Mapping 62 => 45
+MUI[62] = 45
+Mapping 66 => 74
+MUI[66] = 74
+Mapping 34 => 26
+MUI[34] = 26
+Mapping 2 => 27
+MUI[2] = 27
+Mapping 93 => 52
+MUI[93] = 52
+Mapping 29 => 38
+MUI[29] = 38
+Mapping 92 => 23
+MUI[92] = 23
+Mapping 60 => 53
+MUI[60] = 53
+Mapping 28 => 72
+MUI[28] = 72
+Mapping 36 => 83
+MUI[36] = 83
+Mapping 59 => 46
+MUI[59] = 46
+Mapping 91 => 31
+MUI[91] = 31
+Mapping 37 => 68
+MUI[37] = 68
+Mapping 5 => 99
+MUI[5] = 99
+Mapping 90 => 28
+MUI[90] = 28
+Mapping 58 => 54
+MUI[58] = 54
+Mapping 38 => 89
+MUI[38] = 89
+Mapping 6 => 62
+MUI[6] = 62
+Mapping 89 => 79
+MUI[89] = 79
+Mapping 57 => 83
+MUI[57] = 83
+Mapping 39 => 42
+MUI[39] = 42
+Mapping 88 => 42
+MUI[88] = 42
+Mapping 72 => 6
+MUI[72] = 6
+Mapping 8 => 16
+MUI[8] = 16
+Mapping 40 => 25
+MUI[40] = 25
+Mapping 55 => 90
+MUI[55] = 90
+Mapping 41 => 92
+MUI[41] = 92
+Mapping 73 => 36
+MUI[73] = 36
+Mapping 86 => 6
+MUI[86] = 6
+Mapping 54 => 14
+MUI[54] = 14
+Mapping 22 => 10
+MUI[22] = 10
+Mapping 10 => 81
+MUI[10] = 81
+Mapping 42 => 70
+MUI[42] = 70
+Mapping 85 => 93
+MUI[85] = 93
+Mapping 21 => 6
+MUI[21] = 6
+Mapping 11 => 35
+MUI[11] = 35
+Mapping 75 => 85
+MUI[75] = 85
+Mapping 43 => 71
+MUI[43] = 71
+Mapping 52 => 12
+MUI[52] = 12
+Mapping 44 => 21
+MUI[44] = 21
+Mapping 12 => 82
+MUI[12] = 82
+Mapping 76 => 6
+MUI[76] = 6
+Mapping 83 => 8
+MUI[83] = 8
+Mapping 19 => 92
+MUI[19] = 92
+Mapping 13 => 54
+MUI[13] = 54
+Mapping 77 => 4
+MUI[77] = 4
+Mapping 18 => 46
+MUI[18] = 46
+Mapping 50 => 19
+MUI[50] = 19
+Mapping 46 => 39
+MUI[46] = 39
+Mapping 14 => 19
+MUI[14] = 19
+Mapping 17 => 47
+MUI[17] = 47
+Mapping 81 => 89
+MUI[81] = 89
+Mapping 16 => 89
+MUI[16] = 89
+Mapping 48 => 48
+MUI[48] = 48
+ [0 => 86] [64 => 55] [96 => 17] [31 => 45] [63 => 26]
+ [97 => 7] [30 => 75] [62 => 45] [94 => 78] [2 => 27]
+ [34 => 26] [66 => 74] [29 => 38] [93 => 52] [60 => 53]
+ [92 => 23] [28 => 72] [36 => 83] [59 => 46] [91 => 31]
+ [37 => 68] [5 => 99] [90 => 28] [58 => 54] [38 => 89]
+ [6 => 62] [89 => 79] [57 => 83] [39 => 42] [88 => 42]
+ [8 => 16] [40 => 25] [72 => 6] [55 => 90] [73 => 36]
+ [41 => 92] [22 => 10] [54 => 14] [86 => 6] [42 => 70]
+ [10 => 81] [21 => 6] [85 => 93] [43 => 71] [75 => 85]
+ [11 => 35] [52 => 12] [76 => 6] [12 => 82] [44 => 21]
+ [19 => 92] [83 => 8] [77 => 4] [13 => 54] [50 => 19]
+ [18 => 46] [14 => 19] [46 => 39] [81 => 89] [17 => 47]
+ ...
