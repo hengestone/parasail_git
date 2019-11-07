@@ -23,6 +23,6 @@ package body PSC.Versions is
    --  Return a string which identifies the version
    --  of the compiler/virtual machine
    begin
-      return " Revision: 8.0 ";
+      return " Revision: 8.4 ";
    end Version_String;
 end PSC.Versions;

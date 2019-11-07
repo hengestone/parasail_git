@@ -117,7 +117,7 @@ package body Drinking_Philosophers is
       return Result : Phil_To_Bottle_Map 
           {>(for all P1 in Philosopher_Index =>
              for all P2 in Philosopher_Index => 
-                if P1 /= P2 then Result[P1] * Result[P2] = [])<}
+                P1 /= P2 ==> (Result[P1] and Result[P2]) = [])<}
         -- Ensure that there are no duplicates in resulting mapping
           {>(for all B in Bottle_Index => 
 	     for some P in Philosopher_Index => B in Result[P])<}
@@ -151,8 +151,8 @@ package body Drinking_Philosophers is
     func Invert_Bottle_Map(Initial_Bottles : Phil_To_Bottle_Map) 
           {>(for all P1 in Philosopher_Index =>
              for all P2 in Philosopher_Index => 
-                if P1 /= P2 then 
-                  Initial_Bottles[P1] * Initial_Bottles[P2] = [])<}
+                P1 /= P2 ==>
+                  (Initial_Bottles[P1] and Initial_Bottles[P2]) = [])<}
       return Result : Bottle_To_Phil_Mapping is
         -- Invert the mapping from Philospher to Bottles
         Result := Create(1..Num_Bottles, 1);

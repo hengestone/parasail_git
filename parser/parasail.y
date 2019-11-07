@@ -422,7 +422,7 @@ interface_declaration_with_term :
     }
   ;
 
-IS_kw_INDENT : IS_kw INDENT
+IS_kw_INDENT : IS_kw INDENT { $$ := $1; }
   | error IS_kw INDENT {
         yyerror ("Syntax error before ""is""", At_Token => $2);
     }
@@ -705,6 +705,7 @@ IS_no_indent : IS_kw {
             Text_IO.Put(" [is with indent off] "); Text_IO.Flush;
         end if;
         ParaSail_Lex.Expecting_Indent := False;
+        $$ := $1;
     };
 
 -- operation_formal : 
@@ -3500,7 +3501,7 @@ opt_END_IF :
   ;
 
 case_statement : 
-    CASE_kw expression COLON_or_OF_kw_INDENT
+    CASE_kw comparison_expression COLON_or_OF_kw_INDENT
       case_alt_list
       opt_default_alt
     OUTDENT_opt_NEWLINE opt_END_CASE {
@@ -3526,14 +3527,20 @@ OF_kw_INDENT : OF_kw INDENT | NEWLINE OF_kw INDENT ;
 COLON_or_OF_kw_INDENT :
     COLON_INDENT { $$ := $1; }
   | OF_kw_INDENT { $$ := $1; }
+  | IS_kw_INDENT {
+        yyerror
+          ("Use ""of"" rather than ""is"" for a case statement",
+           At_Token => $1);
+        $$ := $1;
+    }
   | ')' COLON_or_OF_kw_INDENT {
         yyerror ("Extra ')'", At_Token => $1);
         $$ := $2;
     }
-  | error COLON_or_OF_kw_INDENT {
-        yyerror ("Syntax error in case selector", At_Token => $2);
-        $$ := $2;
-    }
+--   | error COLON_or_OF_kw_INDENT {
+--         yyerror ("Syntax error in case selector", At_Token => $2);
+--         $$ := $2;
+--     }
   ;
 
 opt_END_CASE :
@@ -4131,8 +4138,8 @@ expr_statement :
   ;
 
 logical_expression :  
-    comparison_expression { $$ := $1; }
-  | logical_expression logical_operator comparison_expression {
+    comparison_or_test_expression { $$ := $1; }
+  | logical_expression logical_operator comparison_or_test_expression {
       declare
 	Left_Tree : PSC.Trees.Tree'Class renames Tree_Ptr_Of($1.Tree).all;
 	use type Binary.Binary_Operator_Enum;
@@ -4163,15 +4170,8 @@ logical_expression :
     }
   ;
 
-comparison_expression :  -- comparisons are non associative
-    simple_expression { $$ := $1; }
-  | simple_expression comparison_operator simple_expression {
-	$$ := (One_Tree, Binary.Make(
-	  Operator => $2.Binary_Op,
-	  Left_Operand => $1.Tree,
-	  Right_Operand => $3.Tree,
-          Source_Pos => $2.Source_Pos));
-    }
+comparison_or_test_expression :
+    comparison_expression { $$ := $1; }
   | adding_expression IN_kw simple_expression {
 	$$ := (One_Tree, Binary.Make(
 	  Operator => Binary.In_Op,
@@ -4207,6 +4207,17 @@ comparison_expression :  -- comparisons are non associative
 	  Kind => Invocation.Is_Function_Of,
 	  Prefix => $1.Tree,
 	  Operands => $5.List));
+    }
+  ;
+
+comparison_expression : -- comparisons are non associative
+    simple_expression { $$ := $1; }
+  | simple_expression comparison_operator simple_expression {
+	$$ := (One_Tree, Binary.Make(
+	  Operator => $2.Binary_Op,
+	  Left_Operand => $1.Tree,
+	  Right_Operand => $3.Tree,
+          Source_Pos => $2.Source_Pos));
     }
   ;
 
@@ -4840,7 +4851,7 @@ COLON_or_THEN_no_indent :
   ;
 
 case_expression : 
-    CASE_kw expression COLON_or_OF_no_indent
+    CASE_kw comparison_expression COLON_or_OF_no_indent
       case_expr_alt_list {
 	$$ := (One_Tree, Case_Construct.Make(
           Source_Pos => $1.Source_Pos,
@@ -4854,6 +4865,12 @@ case_expression :
 COLON_or_OF_no_indent :
     COLON_no_indent  { $$ := $1; }
   | OF_no_indent     { $$ := $1; }
+  | IS_no_indent {
+        yyerror
+          ("Use ""of"" rather than ""is"" for a case statement",
+           At_Token => $1);
+        $$ := $1;
+    }
   | ')' COLON_or_OF_no_indent {
         yyerror ("Extra ')'", At_Token => $1);
         $$ := $2;

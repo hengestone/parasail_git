@@ -8,4 +8,5 @@ Y in 1.0 .. 6.0 = #true
 Y in 1.0 ..< 5.22 = #false
 sqrt(2.0) = 1.41421356237309
 sqrt(-2.0) = -1.0
+../aaa.jli:3907:35: Error: Assertion failed:  {> Val >= 0.0 <}
 ../aaa.jli:3908:5: Error: Assertion failed:  {> Val >= 0.0 <}

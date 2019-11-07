@@ -1,0 +1,7 @@
+import PSL::Short_Names::*
+
+interface PSC::Translate<> is
+   const Debug : Boolean := #false;
+   const Verbose_Debug : Boolean := #false;
+   func Compile(File_Name : String; LLVM_Debug, Optimize : Bool)
+end interface PSC::Translate

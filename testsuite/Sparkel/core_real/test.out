@@ -8,4 +8,5 @@ Y in 1.0 .. 6.0 = #True
 Y in 1.0 ..< 5.22 = #False
 Sqrt(2.0) = 1.41421356237309
 Sqrt(-2.0) = -1.0
-../aaa.ski:5367:10: Error: Assertion failed:  {> Val >= 0.0 <}
+../aaa.ski:5370:32: Error: Assertion failed:  {> Val >= 0.0 <}
+../aaa.ski:5371:10: Error: Assertion failed:  {> Val >= 0.0 <}

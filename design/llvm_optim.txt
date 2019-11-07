@@ -1904,3 +1904,59 @@ but we don't want to use it to substitute for a "real" type descriptor
 in other contexts.  So we need to be careful with compile-time-known
 but not-fully-instantiated type descs.  In particular, Load_Known_Type_Desc
 should complain when All_Parameters_Known is false.
+
+------ 12-Feb-2019
+
+We should generalize the attempt to allocate objects in the stack, and
+generally allocate all optional objects (other than basic arrays which
+can always grow?) in the enclosing object.  We definitely still want
+to identify the region, but with some kind of flag that indicates the
+object's space is taken care of by some enclosing object or stack frame.
+For basic arrays of non-optional objects, we will want to store the
+size of the elements somewhere, to use as a "stride."
+
+Some day we might figure out how to suppress the object header, but for
+now we will always leave room for the header.  To get rid of it we
+would need to construct a null of the right region rather than
+ever passing in the object as a whole.  Presumably we only need the
+region when the object has some optional component, so we could
+presumably always use that optional component for the region indicator.
+We would also need to skip past the header for optional components, or point
+at one before a non-optional component.
+
+Copying a large object will get more complicated, especially of we don't
+store headers for non-optional components, unless we create
+a pre-flattened list of (sub)components (which is not a bad idea).
+
+Locks should be moved into a separate level of object, similar to what
+we do for polymorphic objects.  Of course, we might then turn around
+and flatten the single component, but we would still have at least two
+object headers.
+
+We could take the polymorphic object as the model for locked objects.
+It would be a polymorphic locked object, essentially treating it as
+being something that "implements" the locked interface.  But every
+object will implement the locked interface, similar to the assignable
+interface.  It doesn't require any additional operations.  We still need
+to figure out where to bury the lock number, or the actual lock object.
+It could use the size field -- we shouldn't be copying lock objects.
+We currently play some games with sharing a lock across a wrapper.  Not
+sure how that will play out.
+
+--------- 2-June-2019 -----
+
+We are working on speeding up work-stealing, by effectively bypassing it
+when there are sufficient picothreads on the queue.
+
+We are ending up with deadlock on the AdaMagic version, presumably because
+we are never noticing the "need more sharable threads" flag.
+Can we avoid this by using a protected object more cleverly?
+[June 18] Actually, the problem was that we were putting a queuing thread of
+a shared master onto the unshared-thread queue.  It seems OK to put
+a thread that never queues on the unshared-thread queue, even if its
+master is shared.  But if it might queue, we can get ourselves
+into trouble.
+
+As far as allocating on the stack, it is OK to allocate an optional object
+on the stack, since it is OK to add stack objects to the reclamation
+table.  This only works for objects in the local region.

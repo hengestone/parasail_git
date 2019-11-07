@@ -1,3 +1,3 @@
 #!/bin/bash
 
-tcsh ../../../bin/pslc.csh -k -w $*
+tcsh ../../../bin/pslc.csh -k -w -s $*

@@ -18,7 +18,7 @@ if ("$psl_dir:t" == "install") then
 endif
 
 # TODO: version
-set version_string = "ParaSail Interpreter version 8.0"
+set version_string = "ParaSail Interpreter version 8.4"
 alias print_help eval '\
 echo "interp.csh [<flags>] [<lib1>.ps? ...] <main>.psl [-command <op> <param> ...]"\
 echo " Valid flags are:"\
@@ -107,7 +107,7 @@ while ("$1" != "--")
    endsw
    shift
 end
-shift # ignore the -- that seperates arguments and files
+shift # ignore the -- that separates arguments and files
 # now, $* only contains files, not arguments
 
 if ("$parallelize_flag" == 0 && "$explicit_par_only_flag" == 0) then

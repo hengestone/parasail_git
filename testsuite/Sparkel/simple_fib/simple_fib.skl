@@ -1,11 +1,10 @@
 package Simple_Fib is
-    proc Print(X : Integer);
+    proc Print(X : Integer) is import(#print_int);
     func Fib  (N : Integer) return Integer;
 end Simple_Fib;
  
 package body Simple_Fib is
   exports
-    proc Print(X : Integer) is import(#print_int);
 
     func Fib(N : Integer) return Integer is
 	if N <= 1 then

@@ -1,7 +1,7 @@
 ------------------------------------------------------------------------------
 --                              P A R A S A I L                             --
 --                                                                          --
---                     Copyright (C) 2012-2018, AdaCore                     --
+--                     Copyright (C) 2012-2019, AdaCore                     --
 --                                                                          --
 -- This is free software;  you can redistribute it  and/or modify it  under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -161,7 +161,7 @@ package body PSC.Trees.Module is
             when Languages.Parasail | Languages.Parython |
               Languages.Javallel =>
                Put_Line (On, "import", Indent => Indent);
-            when Languages.Sparkel =>
+            when Languages.Ada_Ish =>
                Put_Line (On, "with", Indent => Indent);
          end case;
 
@@ -234,7 +234,7 @@ package body PSC.Trees.Module is
                else
                   Put (On, "class ");
                end if;
-            when Languages.Sparkel =>
+            when Languages.Ada_Ish =>
                if T.Is_Interface then
                   Put (On, "package ");
                else
@@ -352,7 +352,7 @@ package body PSC.Trees.Module is
             else
                Put (On, "class ");
             end if;
-         when Languages.Sparkel =>
+         when Languages.Ada_Ish =>
             if T.Treat_As_Type then
                Put (On, "record ");
             else

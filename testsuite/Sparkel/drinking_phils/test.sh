@@ -3,4 +3,4 @@
 export Set LC_ALL=C
 
 RUN="skli ../aaa.ski"
-$RUN drinking_phils.skl -command Test_DP 30
+$RUN drinking_phils.skl -command Test_DP 7

@@ -1,4 +1,4 @@
-Release notes for 2019-Feb-8 release 8.0 of the
+Release notes for 2019-Oct-31 release 8.4 of the
 ParaSail Interpreter, Compiler, and Virtual Machine.
 
 All ParaSail-specific parts of this release are:
@@ -30,7 +30,7 @@ from the source release.  The Windows binaries are limited to those
 we were able to build without GTK, the Readline library, or LLVM.
 What this means is that we have the basic interpreters (e.g. parasail_main.exe)
 but not the bootstraped compiler (compiler.exe) or the compiled run-time
-library (aaa.psli.o).  We hope to overcome some of these limitations at
+library (aaa.psi.o).  We hope to overcome some of these limitations at
 some point in the future.
 
 NOTE 2: To use the llvm-based compiler (bin/pslc.csh and lib/compiler.psl),
@@ -65,6 +65,8 @@ of the GNAT Ada compiler (see http://llvm.org and http://libre.adacore.com).
     * sparkel_examples/*.sk?         -- Sparkel standard library and examples
     * javallel_examples/*.jl?        -- Javallel standard library and examples
     * parython_examples/*.pr?        -- Parython standard library and examples
+    * ada202x_examples/*.pr?         -- Ada202X standard library and examples
+                                     -- (very preliminary -- based on Sparkel)
 
     * aflex_ayacc/aflex              -- Sources to AFlex lexer generator
     * aflex_ayacc/ayacc              -- Sources to AYacc parser generator
@@ -111,6 +113,7 @@ After running the Makefile ("make"), the following will be present:
     * install/bin/skli              -- Sparkel interpreter will be copied here
     * install/bin/jlli              -- Javallel interpreter will be copied here
     * install/bin/pryi              -- Parython interpreter will be copied here
+    * install/bin/a2xi              -- Ada202X interpreter will be copied here
     * install/share/doc/*/*         -- Copies of documentation
     * install/share/examples/*/*.??? -- Copies of examples and libraries
     * install/share/tools/*/*       -- Various tools, highlighting info, etc.
@@ -194,7 +197,7 @@ in _linux and _mac
 
 PARASAIL INTERACTIVE DEBUGGER
 
-A nice new feature of release 8.0 is an interactive debugger.  It is only
+A nice new feature since release 8.0 is an interactive debugger.  It is only
 useful when using the ParaSail interpreter, and is loaded automatically
 by using the "bin/interp.csh" script.  It gets invoked any time an
 assertion or a pre/postcondition fails at run-time, as well on other
@@ -682,6 +685,15 @@ specified revision:
               When using the interpreter, if the debugger console has been
               loaded (which bin/interp.csh always does), the console will be
               invoked when an assertion or pre/postcondition fails.
+  * [rev 8.4] Added a very preliminary Ada202X front end, based on Sparkel
+              but with a few syntax changes to match Ada202X syntax, such
+              as "parallel for I in 1..100 loop".  Tested all of the
+              various front ends (parython_main, sparkel_main, ...) using
+              the testsuite/* tests, and fixed all identified bugs.
+              The debugger console is now more robust.  bin/interp.csh
+              automatically loads it, and as indicated above, it is invoked
+              automatically when an assertion/pre/postcondition fails,
+              or if you invoke bin/interp.csh with the "xxx" flag.
 
 We are very interested in your feedback.  Please use the ParaSail Google 
 Group (see link above) to provide whatever comments or suggestions you

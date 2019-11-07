@@ -19,7 +19,7 @@ interface PSL::Core::Assignable<>
 
 class interface PSL::Core::Boolean<> :
     defop "from_univ"(Lit : Univ_Enumeration) 
-      {> Lit in [#false | #true] <}
+      {> Lit in [#false, #true] <}
       -> Boolean is import(#bool_from_univ)
 
     defop "to_univ"(Val : Boolean) -> Univ_Enumeration 
@@ -122,13 +122,13 @@ class interface PSL::Core::Univ_Enumeration<> :
       is import(#print_univ_enum)
 
     def To_String(Val : Univ_Enumeration) -> Univ_String
-      is import(#identity)
+      is import(#to_string_enum)
 
     def From_String(Str : Univ_String) -> optional Univ_Enumeration
-      is import(#identity)
+      is import(#from_string_enum)
 
     def Hash(Val : Univ_Enumeration) -> Univ_Integer
-      is import(#identity)
+      is import(#hash_enum)
 
     defop "in"(Left : Univ_Enumeration; Right : Set<Univ_Enumeration>) 
       -> Boolean<>
@@ -144,7 +144,7 @@ end interface PSL::Core::Optional
 class interface PSL::Core::Ordering<> :
   # Enumeration type used to represent value of "=?" operator
     defop "from_univ"(Lit : Univ_Enumeration) 
-      {> Lit in [#less | #equal | #greater | #unordered] <}
+      {> Lit in [#less, #equal, #greater, #unordered] <}
       -> Ordering is import(#ordering_from_univ)
 
     defop "to_univ"(Val : Ordering) -> Univ_Enumeration 
@@ -6446,7 +6446,7 @@ class interface PSL::Core::Enum_With_Rep
     defop "to_univ"(Val : optional Enum_With_Rep)
       -> Result : optional Univ_Enumeration
       {> Result is null or else
-        (for some [Lit => Val] of Literals => Lit == Result) <}
+        (for some [Lit => V] of Rep_Map => Lit == Result) <}
 
     # Functions to convert from/to rep
     def From_Rep (Rep : optional Rep_Type) -> optional Enum_With_Rep

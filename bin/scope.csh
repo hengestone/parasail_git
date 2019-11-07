@@ -25,6 +25,7 @@ echo "  -i             Use the interpreter to execute parascope,"\
 echo "                 even if bin/parascope.exe exists."\
 echo "  -l             Linear: do not analyze files in parallel."\
 echo "  -v             Provide more verbose output"\
+echo "  -d             Load the debugger console when using the interpreter"\
 echo "  -h             Print this help message"'
 
 # Give help if no parameters
@@ -35,7 +36,7 @@ if ("$#" == 0) then
 endif
 
 # a ':' following a letter means that letter takes an argument
-set valid_flags = "ilvh"
+set valid_flags = "ilvdh"
 set argv = `getopt $valid_flags $*`
 # TODO: full word arguments with --.
 # get opt puts all the options before a -- and all the operands after
@@ -54,6 +55,7 @@ endif
 set scope_flags = ""
 
 set scope_verbose = 0
+set console = ""
 
 # interpret the compiler or use the compiled compiler
 set use_interpreter = 0
@@ -75,6 +77,10 @@ while ("$1" != "--")
          # provide more verbose output
          set scope_verbose = 1
          breaksw
+      case "-d":
+         # include debugger console when using the interpreter
+         set console = "$psl_dir/lib/debugger_console.psl"
+         breaksw
       # TODO: case "--help":
       case "-h":
          # print help info and quit
@@ -88,7 +94,7 @@ shift # ignore the -- that separates arguments and files
 # now, $* only contains files, not arguments
 
 set standard_library = "$psl_dir/lib/aaa.psi"
-set scope_srcs = "$psl_dir/lib/reflection.ps? $psl_dir/lib/vn_il.psi $psl_dir/lib/vn_il_stub.psl $psl_dir/lib/psvm_debugging.ps? $psl_dir/lib/parascope.ps?"
+set scope_srcs = "$psl_dir/lib/reflection.ps? $psl_dir/lib/vn_il.psi $psl_dir/lib/vn_il_stub.psl $psl_dir/lib/psvm_debugging.ps? $console $psl_dir/lib/parascope.ps?"
 
 set scope_and_deps = "$standard_library $scope_srcs"
 

@@ -26,6 +26,7 @@ for J in *; do
       case $J in
          "ParaSail" | \
          "Sparkel"  | \
+         "Ada202x"  | \
          "Parython" | \
          "Javallel")
                echo $J

@@ -2829,17 +2829,24 @@ parallel_sequence_with_term :
 	$$ := (One_Tree, Binary.Make(
 	  Operator => Binary.Parallel_Stmt_Op,
 	  Left_Operand => $1.Tree,
-	  Right_Operand => $3.Tree));
+	  Right_Operand => $3.Tree,
+          Source_Pos => $2.Source_Pos));
     }
   | parallel_sequence_with_term PARALLEL_opt_NL statement_sequence_with_term {
 	$$ := (One_Tree, Binary.Make(
 	  Operator => Binary.Parallel_Stmt_Op,
 	  Left_Operand => $1.Tree,
-	  Right_Operand => $3.Tree));
+	  Right_Operand => $3.Tree,
+          Source_Pos => $2.Source_Pos));
     }
   ;
 
-PARALLEL_opt_NL : PARALLEL | PARALLEL NEWLINE ;
+PARALLEL_opt_NL : PARALLEL {
+        $$ := $1;
+    }
+  | PARALLEL NEWLINE {
+        $$ := $1;
+    };
 
 parallel_sequence_no_term :
     statement_sequence { 
@@ -2849,13 +2856,15 @@ parallel_sequence_no_term :
 	$$ := (One_Tree, Binary.Make(
 	  Operator => Binary.Parallel_Stmt_Op,
 	  Left_Operand => $1.Tree,
-	  Right_Operand => $3.Tree));
+	  Right_Operand => $3.Tree,
+          Source_Pos => $2.Source_Pos));
     }
   | parallel_sequence_with_term PARALLEL_opt_NL statement_sequence {
 	$$ := (One_Tree, Binary.Make(
 	  Operator => Binary.Parallel_Stmt_Op,
 	  Left_Operand => $1.Tree,
-	  Right_Operand => $3.Tree));
+	  Right_Operand => $3.Tree,
+          Source_Pos => $2.Source_Pos));
     }
   ;
 

@@ -391,7 +391,7 @@ package body PSC.Trees.Operation is
             when Languages.ParaSail | Languages.Parython |
               Languages.Javallel =>
                Put (On, " -> ");
-            when Languages.Sparkel =>
+            when Languages.Ada_Ish =>
                Put (On, " is ");
          end case;
          Display_Subtree (T.Statements, On);
@@ -408,7 +408,7 @@ package body PSC.Trees.Operation is
             when Languages.ParaSail | Languages.Parython |
               Languages.Javallel =>
                Put (On, "-> ");
-            when Languages.Sparkel =>
+            when Languages.Ada_Ish =>
                Put (On, "return ");
          end case;
          if Length (T.Operation_Outputs) > 1
@@ -458,7 +458,7 @@ package body PSC.Trees.Operation is
                when Languages.ParaSail | Languages.Parython |
                     Languages.Javallel =>
                   Put (On, " in ");
-               when Languages.Sparkel =>
+               when Languages.Ada_Ish =>
                   Put (On, " of ");
             end case;
             Display_Subtree (T.Op_Location, On);

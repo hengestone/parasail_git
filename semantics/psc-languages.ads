@@ -8,11 +8,17 @@
 -- ware  Foundation;  either version 3,  or (at your option) any later ver- --
 -- sion.  This software is distributed in the hope  that it will be useful, --
 -- but WITHOUT ANY WARRANTY;  without even the implied warranty of MERCHAN- --
--- TABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public --
--- License for  more details.  You should have  received  a copy of the GNU --
--- General  Public  License  distributed  with  this  software;   see  file --
--- COPYING3.  If not, go to http://www.gnu.org/licenses for a complete copy --
--- of the license.                                                          --
+-- TABILITY or FITNESS FOR A PARTICULAR PURPOSE.                            --
+--                                                                          --
+-- As a special exception under Section 7 of GPL version 3, you are granted --
+-- additional permissions described in the GCC Runtime Library Exception,   --
+-- version 3.1, as published by the Free Software Foundation. See           --
+-- documentation/COPYING3 and documentation/GCC_RUNTIME3_1 for details.     --
+--                                                                          --
+-- In particular,  you can freely  distribute your programs  built with     --
+-- the ParaSail, Sparkel, Javallel, or Parython compiler, including any     --
+-- required library run-time units written in Ada or in any of the above    --
+-- languages, using any licensing terms  of your choosing.                  --
 --                                                                          --
 -- The ParaSail language and implementation were originally developed by    --
 -- S. Tucker Taft.                                                          --
@@ -23,7 +29,9 @@ package PSC.Languages is
 
    pragma Elaborate_Body;
 
-   type Language_Enum is (ParaSail, Sparkel, Parython, Javallel);
+   type Language_Enum is (ParaSail, Sparkel, Ada202x, Parython, Javallel);
+
+   subtype Ada_Ish is Language_Enum range Sparkel .. Ada202x;
 
    type Convention_Enum is
       --  Calling/representation convention for compiled routines
@@ -43,15 +51,16 @@ package PSC.Languages is
    --  Set the Language
 
    function Language return Language_Enum;
-   --  Return the current language (ParaSail, Sparkel, Parython, or Javallel)
+   --  Return the current language
+   --    (ParaSail, Sparkel, Ada202x, Parython, or Javallel)
 
    function Language_Name return String;
-   --  Return the Language Name ("ParaSail," "Sparkel," "Parython,"
+   --  Return the Language Name ("ParaSail," "Sparkel," "Ada202x," "Parython,"
    --  or "Javallel")
 
    function Language_Name_LC return String;
    --  Return the Language Name in lower case
-   --  ("parasail", "sparkel", "parython", "javallel");
+   --  ("parasail", "sparkel", "ada202x", "parython", "javallel");
 
    function Language_Uses_Selection_For_Modules return Boolean;
    --  Return True if language uses selection syntax (e.g. ".") for

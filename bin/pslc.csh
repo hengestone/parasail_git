@@ -52,13 +52,16 @@ echo "  -p             Parallelize automatically certain out-of-line calls."\
 echo "  -t             Time: Display the execution time for the compiler."\
 echo "  -v             Print version and other verbose output."\
 echo "  -d             Print very verbose (debug) output."\
-echo "  -s             Try to use the stack for large local objects (beta)."\
 echo "  -w             Print ParaSail virtual machine instructions."\
 echo "  -h             Print this help message"\
 echo "Before anything else, you must run: bin/pslc.csh -b3"\
 echo "(it will take 20+ minutes of CPU time, about 6 mins on a 4-core machine)"'
 
 # n = 5 compile the standard library in pieces (aaa/aaa*.ps?)
+
+# Now the default:
+#   echo "  -s         Try to use the stack for large local objects (beta)."
+
 
 # Give help if no parameters
 if ("$#" == 0) then
@@ -96,7 +99,7 @@ set sequential = 0
 set psli_flags = ""
 
 # llc (ll -> .s) flags
-set llc_flags = "-asm-verbose -O=0"
+set llc_flags = "-asm-verbose -O=0 -relocation-model=pic"
 
 # whether or not to link with Ada
 set link = 1
@@ -141,7 +144,7 @@ while ("$1" != "--")
       case "-O":
          # set optimization level
          set pslc_flags = ($pslc_flags "-O$2")
-         set llc_flags = "-asm-verbose -O=$2"
+         set llc_flags = "-asm-verbose -O=$2 -relocation-model=pic"
          set optim = "$2"
          shift
          breaksw
@@ -245,14 +248,22 @@ while ("$1" != "--")
    endsw
    shift
 end
-shift # ignore the -- that seperates arguments and files
+shift # ignore the -- that separates arguments and files
 # now, $* only contains files, not arguments
 
-if ("$optim" > 0 && "$parallelize_flag" == 0 && \
+if (! -e $psl_dir/bin/compiler.exe) then
+   set use_interpreter = 1
+endif
+
+if ("$parallelize_flag" == 0 && \
     "$explicit_par_only_flag" == 0) then
-   #  When optimizing, turn off automatic parallelization unless
-   #  explicitly requested.
-   set psli_flags = ($psli_flags "-parcalls off")
+   if ("$optim" > 0 || "$use_interpreter" == 1) then
+      #  When optimizing or using the interpreter, turn off automatic
+      #  parallelization unless explicitly requested.
+      #  NOTE: We turn it off when interpreting to reduce the stack usage
+      #        within the interpreter.
+      set psli_flags = ($psli_flags "-parcalls off")
+   endif
 endif
 
 set pslc_flags = ($pslc_flags "$verbose_flg")
@@ -288,6 +299,8 @@ set parascope_srcs = "$psl_dir/lib/reflection.ps? $psl_dir/lib/vn_il.psi"
 set parascope_srcs = "$parascope_srcs $psl_dir/lib/vn_il_stub.psl"
 set parascope_srcs = "$parascope_srcs $psl_dir/lib/psvm_debugging.ps?"
 set parascope_srcs = "$parascope_srcs $psl_dir/lib/parascope.ps?"
+
+set debugger_console = "$psl_dir/lib/debugger_console.psl"
 
 set compiler_main = "$psl_dir/lib/compiler_main.psl"
 
@@ -377,17 +390,13 @@ if ("$exe" == "") then
    endif
 endif
 
-if (! -e $psl_dir/bin/compiler.exe) then
-   set use_interpreter = 1
-endif
-
 # run the parasail compiler, if necessary
 if ("$to_be_compiled" != "") then
    if ($use_interpreter == 1) then
       if ("$verbose_flg" != "") then
-         echo $do_time $psl_dir/build/bin/parasail_main $psli_flags $compiler_and_deps $files -command Compile $pslc_flags $to_be_compiled
+         echo $do_time $psl_dir/build/bin/parasail_main $psli_flags $compiler_and_deps $debugger_console $files -command Compile $pslc_flags $to_be_compiled
       endif
-      $do_time $psl_dir/build/bin/parasail_main $psli_flags $compiler_and_deps $files -command Compile $pslc_flags $to_be_compiled
+      $do_time $psl_dir/build/bin/parasail_main $psli_flags $compiler_and_deps $debugger_console $files -command Compile $pslc_flags $to_be_compiled
       if ("$?" != 0) then
          exit "$?"
       endif

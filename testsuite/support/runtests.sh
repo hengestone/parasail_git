@@ -114,7 +114,8 @@ mainloop() {
                    else
                       echo $i " " $cmd " " $out " " >> $LOG_FILE
 
-                      (source $cmd 2>&1) > tmp.out
+                      (source $cmd 2>&1) | \
+                        egrep -v "^(ld:|Installing|object file)" > tmp.out
 
                       if test -f $out; then
                          diff -u $out tmp.out > diff.out
@@ -199,6 +200,10 @@ case $LANGUAGE in
                   ln -s ../../sparkel_examples/aaa.ski
                fi
                ;;
+    "Ada202x") if ! test -L aaa.a2i; then
+                  ln -s ../../ada202x_examples/aaa.a2i
+               fi
+               ;;
    "Parython") if ! test -L aaa.pri; then
                   ln -s ../../parython_examples/aaa.pri
                fi
@@ -212,6 +217,7 @@ case $LANGUAGE in
                echo "  It must be executed in one of the following directories:"
                echo "   - testsuite/ParaSail"
                echo "   - testsuite/Sparkel"
+               echo "   - testsuite/Ada202x"
                echo "   - testsuite/Parython"
                echo "   - testsuite/Javallel"
                exit -1
@@ -261,6 +267,8 @@ case $USE_COMPILER in
                        ;;
             "Sparkel") echo "error: compiler for Sparkel not available"
                        ;;
+            "Ada202x") echo "error: compiler for Ada202x not available"
+                       ;;
            "Parython") echo "error: compiler for Parython not available"
                        ;;
            "Javallel") echo "error: compiler for Javallel not available"
@@ -284,6 +292,9 @@ case $USE_COMPILER in
                        ;;
             "Sparkel") echo "*** Sparkel Testsuite"
                        TOOL="skli"
+                       ;;
+            "Ada202x") echo "*** Ada202x Testsuite"
+                       TOOL="a2xi"
                        ;;
            "Parython") echo "*** Parython Testsuite"
                        TOOL="pryi"

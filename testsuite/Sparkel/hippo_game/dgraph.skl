@@ -40,12 +40,14 @@ package DGraph is
     func Has_Edge(DGraph; From, To : Node_Id) return Boolean;
       -- Returns #True if Edge exists in graph going From to To
 
-    func Successors(ref const DGraph; Node_Id) return ref const Node_Set
-      {Node_Id in DGraph};
+    func Successors(ref const DGraph; Node_Id)
+      {Node_Id in DGraph}
+      return ref const Node_Set;
       -- The set of successors of a given node
 
-    func Predecessors(ref const DGraph; Node_Id) return ref const Node_Set
-      {Node_Id in DGraph};
+    func Predecessors(ref const DGraph; Node_Id)
+      {Node_Id in DGraph}
+      return ref const Node_Set;
       -- The set of predecessors of a given node
 
     func All_Nodes(DGraph) return Node_Set;

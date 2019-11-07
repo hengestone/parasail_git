@@ -380,7 +380,9 @@ class PSC::Translate is
    //  Routine and Type_Descriptor for the call
    //  returns (null, null) if not compile-time known
    func Routine_And_TDesc_For_Call(
-      Target, Static_Link : Reflection::Object_Locator) ->
+      Target, Static_Link : Reflection::Object_Locator;
+      Known_Static_Link : optional Reflection::Type_Descriptor := null;
+      Target_Index : Reflection::Routine_Index := 0) ->
       Pair<optional Reflection::Routine,
            optional Reflection::Type_Descriptor> is
       const CT_Base   := Base(Target);
@@ -388,7 +390,9 @@ class PSC::Translate is
       const SL_Base   := Base(Static_Link);
       const SL_Offset := Offset(Static_Link);
       var Type_Desc_To_Use :
-         optional Reflection::Type_Descriptor := null;
+         optional Reflection::Type_Descriptor :=
+           Known_Static_Link not null? Known_Static_Link :
+           SL_Base == Zero_Base?  Type_Desc_At_Locator(Static_Link) : null;
       var Routine : Reflection::Routine;
 
       if CT_Base == Zero_Base then
@@ -406,14 +410,20 @@ class PSC::Translate is
 
          //  TBD: We can also figure it out if CT_Base == Enclosing_Type_Area.
 
-         if SL_Base == Zero_Base
+         if Type_Desc_To_Use not null
            and then CT_Base == Type_Area
            and then CT_Offset in Type_Operation_Offsets
+           and then not Type_Desc_To_Use.Is_Polymorphic()
+              //  TBD: Do something with "known" polymorphic types some day?
          then
             //  Dig out the information from the operations table
-            Type_Desc_To_Use :=
-               Type_Desc_At_Locator(Static_Link);
-            const Op_Index := [[CT_Offset - Type_Operation_Offsets.First]];
+            var Op_Index : Reflection::Operation_Index :=
+              [[CT_Offset - Type_Operation_Offsets.First]];
+
+            if Has_Op_Map (Type_Desc_To_Use) then
+               Op_Index := Op_Map (Type_Desc_To_Use)[Op_Index];
+               Type_Desc_To_Use := Actual_Type (Type_Desc_To_Use);
+            end if;
             const Info := Operations(Type_Desc_To_Use)[Op_Index]
 
             if Info.Action != #no_action then
@@ -426,6 +436,18 @@ class PSC::Translate is
                Type_Desc_To_Use := Info.Type_Desc;
             end if
             Routine := Routine_At_Index(Info.Index);
+
+            if Debug_Call and then SL_Base != Zero_Base then
+               Println("After digging into " |
+                 Known_Static_Link.Name() | " (op " | Target |
+                 ") found routine " | Routine.Module_Name() |
+                 "::" | Routine.Name_With_Overloading_Index());
+               if Target_Index != 0 then
+                  Println("  Original routine name = " |
+                    Reflection::Routine::Routine_At_Index
+                      (Target_Index).Name());
+               end if;
+            end if;
          else
             //  Not Compile-Time known
             return (null, null);
@@ -1623,6 +1645,32 @@ class PSC::Translate is
          end case
       end func Get_Known_Type_Desc;
 
+      func Get_Type_Desc_If_Known
+        (Loc : Reflection::Object_Locator;
+         UID : String)
+        -> optional Reflection::Type_Descriptor is
+        //  Return type descriptor at given locator relative to
+        //  current type descriptor if known.
+        //  Return null otherwise.
+         if Loc.Base() == Zero_Base then
+            return Reflection::Type_Descriptor::Type_Desc_At_Locator(Loc);
+         else
+            const Cur_Type_Desc_Reg := Current_Type_Desc("ktd_" | UID);
+            const Cur_Type_Desc := VM_Reg_Type_Desc (Cur_Type_Desc_Reg);
+              //  Type descriptor if known, or null.
+
+            if Cur_Type_Desc not null
+              and then Cur_Type_Desc.All_Parameters_Known()
+            then
+               //  Handle case where cur type desc fully known at compile time
+               return Get_Known_Type_Desc (Cur_Type_Desc, Loc);
+            else
+               //  Type desc not known
+               return null;
+            end if;
+         end if;
+      end func Get_Type_Desc_If_Known;
+
       func Load_Type_Desc(Loc : Reflection::Object_Locator;
          Gets : String;
          TDesc_To_Use : optional Reflection::Type_Descriptor := null;
@@ -1656,13 +1704,6 @@ class PSC::Translate is
             end if
             return;  //  All done
 
-         elsif TDesc_To_Use not null
-           and then TDesc_To_Use.All_Parameters_Known()
-         then
-            //  Special case where fully-instantiated type descriptor
-            //  is provided by caller
-            Load_Known_Type_Desc (Gets, TDesc_To_Use, UID_Extra);
-            return;  //  All done
          end if;
 
          const UID := UI | (UID_Extra == 0? "" : ("_" | UID_Extra));
@@ -2460,7 +2501,9 @@ class PSC::Translate is
                               Opcode (Instr) == #Indirect_Call_Op;
 
             const Routine_TDesc := Routine_And_TDesc_For_Call
-               (Instr.Call_Target(), Static_Link_Loc);
+               (Instr.Call_Target(), Static_Link_Loc,
+                Get_Type_Desc_If_Known (Static_Link_Loc, UI),
+                Instr.Target_Index());
             const Routine_To_Call := Routine_TDesc.First;
             const Routine := Routine_To_Call not null?
                               Routine_To_Call :
@@ -3768,6 +3811,7 @@ class PSC::Translate is
             //  Assign unique llvm identifiers
             const Dest_Addr := "%_dest_addr" | UI;
             const Dest_Val  := "%_dest"      | UI;
+            const Dest_Ptr  := "%_dest_ptr"  | UI;
             const Desc      := "%_desc"      | UI;
             const Src_Addr  := "%_src_addr"  | UI;
             const Src_Val   := "%_src"       | UI;
@@ -3775,6 +3819,8 @@ class PSC::Translate is
             //  Get arguments
             Load_Type_Desc(Instr.Type_Info(), Desc);
             const Source_Loc := Instr.Source()
+            const Type_Desc :=
+              Get_Type_Desc_If_Known (Instr.Type_Info(), UI);
 
             if Source_Loc.Base() == Zero_Base then
                TLO |= Src_Val | " = bitcast i64 0 to i64"
@@ -3788,19 +3834,29 @@ class PSC::Translate is
             end if
 
             //  Call run time system builtin
-            if TLO.Use_Stack_For_Objects then
-               if VM_Reg_Is_For_Local (Dest_Val) then
-                  if Debug_VM_Reg_Info_Prop then
-                     Put_Error ("new object " | Dest_Val |
-                       " could be on stack",
-                       Instr.Source_Pos(), Message_Kind => "Info");
-                  end if;
+            if TLO.Use_Stack_For_Objects
+              and then VM_Reg_Is_For_Local (Dest_Val)
+              and then Type_Desc not null
+            then
+               if Debug_VM_Reg_Info_Prop then
+                  Put_Error ("new object " | Dest_Val |
+                    " is on stack",
+                    Instr.Source_Pos(), Message_Kind => "Info");
                end if;
+               TLO |= Dest_Ptr | " = alloca i64, i64 " |
+                 |Type_Desc.Components()| + 1;
+               TLO |= Dest_Val | " = ptrtoint i64* " | Dest_Ptr |
+                  " to i64";
+               const Func := "@_psc_init_large_obj";
+               TLO.Declare(Func, "void `(Func)(i64*, i64*, i64)");
+               TLO |= "call void " | Func |
+                 "(i64* %_Context, i64* `(Desc), i64 `(Dest_Val))";
+            else
+               const Func := "@_psc_new_object";
+               TLO.Declare(Func, "i64 `(Func)(i64*, i64*, i64)");
+               TLO |= Dest_Val | " = call i64 " | Func |
+                 "(i64* %_Context, i64* `(Desc), i64 `(Src_Val))";
             end if;
-            const Func := "@_psc_new_object";
-            TLO.Declare(Func, "i64 `(Func)(i64*, i64*, i64)");
-            TLO |= Dest_Val | " = call i64" | Func |
-              "(i64* %_Context, i64* `(Desc), i64 `(Src_Val))";
             Store_Via_Locator(Instr.Destination(), Dest_Addr, Dest_Val,
               UID_Extra => 1)
 
@@ -4071,7 +4127,8 @@ class PSC::Translate is
             const SL_Loc := Instr.Operation_Static_Link()
             const SL_Base := Base(SL_Loc);
 
-            const Routine_TDesc := Routine_And_TDesc_For_Call(Op_Loc, SL_Loc);
+            const Routine_TDesc := Routine_And_TDesc_For_Call(Op_Loc, SL_Loc,
+                                     Get_Type_Desc_If_Known (SL_Loc, UI));
             const Target_Routine := Routine_TDesc.First;
             //  Don't find the name if it's Type_Area because there are
             //  some builtins without exported names. Those need to be
@@ -4189,7 +4246,9 @@ class PSC::Translate is
                CT_Base := Base(Target);
                CT_Offset := Offset(Target);
                const Routine_TDesc := Routine_And_TDesc_For_Call
-                  (Target, Instr_PSL);
+                  (Target, Instr_PSL,
+                   Get_Type_Desc_If_Known (Instr_PSL, UI),
+                   Instr.Parallel_Target_Index());
 
                Type_Desc_To_Use := Routine_TDesc.Second;
                const Routine_To_Call := Routine_TDesc.First;
@@ -6156,7 +6215,7 @@ func Compile(Files : PSL::Containers::Basic_Array<String>) is
    var More_Verbose : Bool := #false;
    var Max_Instrs_For_Inlining := 20;  //  Default inlining cutoff
    var Checks_Flag : Bool := #false;
-   var Use_Stack_For_Objects : Bool := #false;
+   var Use_Stack_For_Objects : Bool := #true;
 
    //  Analyze flags
    for each Arg of Files forward loop
@@ -6195,6 +6254,7 @@ func Compile(Files : PSL::Containers::Basic_Array<String>) is
          Checks_Flag := #true;
       elsif Arg == "--stack" then
          --  Try to use the stack for local large objects
+         --  NOTE: As of 7/23/2019, this is the default
          Use_Stack_For_Objects := #true;
       elsif Len >= 8 and then Arg[1 .. 8] == "--inline" then
          //  --inline=0 turns off inlining

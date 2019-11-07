@@ -52,6 +52,24 @@ package body PSC.Trees.Semantics.Translator is
 
    Library : Lists.List renames Symbols.Library_Region.Stmt_List;
 
+   --  Breakpoint index and table  --
+
+   type Breakpoint_Count is range 0 .. 100;
+   subtype Breakpoint_Index is
+     Breakpoint_Count range 1 .. Breakpoint_Count'Last;
+
+   --  Routine and line# where a given breakpoint is set.
+   type Breakpoint is record
+      Op : Routine_Ptr := null;
+      Line : Source_Positions.Line_Number := 0;
+   end record;
+
+   Breakpoints : array (Breakpoint_Index) of Breakpoint;
+
+   Last_Breakpoint : Breakpoint_Count := 0;
+
+   --------
+
    Code_Offset_Array_Name : constant Strings.U_String := Strings.String_Lookup
       ("PSL::Containers::Basic_Array" &
           "<PSC::Reflection::Instruction::Code_Offset>");
@@ -165,6 +183,12 @@ package body PSC.Trees.Semantics.Translator is
       Params : Word_Ptr;
       Static_Link : Non_Op_Map_Type_Ptr);
    pragma Export (Ada, Decl_Location, "_psc_decl_location");
+
+   procedure Decl_Component_Index
+     (Context : Exec_Context;
+      Params : Word_Ptr;
+      Static_Link : Non_Op_Map_Type_Ptr);
+   pragma Export (Ada, Decl_Component_Index, "_psc_decl_component_index");
 
    procedure Decl_Source_Pos
      (Context : Exec_Context;
@@ -897,6 +921,36 @@ package body PSC.Trees.Semantics.Translator is
       Static_Link : Non_Op_Map_Type_Ptr);
    pragma Export (Ada, Routine_At_Index, "_psc_routine_at_index");
 
+   procedure Set_Breakpoint
+     (Context : Exec_Context;
+      Params : Word_Ptr;
+      Static_Link : Non_Op_Map_Type_Ptr);
+   pragma Export (Ada, Set_Breakpoint, "_psc_set_breakpoint");
+
+   procedure Clear_Breakpoint
+     (Context : Exec_Context;
+      Params : Word_Ptr;
+      Static_Link : Non_Op_Map_Type_Ptr);
+   pragma Export (Ada, Clear_Breakpoint, "_psc_clear_breakpoint");
+
+   procedure Num_Breakpoints
+     (Context : Exec_Context;
+      Params : Word_Ptr;
+      Static_Link : Non_Op_Map_Type_Ptr);
+   pragma Export (Ada, Num_Breakpoints, "_psc_num_breakpoints");
+
+   procedure Nth_Breakpoint_Routine
+     (Context : Exec_Context;
+      Params : Word_Ptr;
+      Static_Link : Non_Op_Map_Type_Ptr);
+   pragma Export (Ada, Nth_Breakpoint_Routine, "_psc_nth_breakpoint_routine");
+
+   procedure Nth_Breakpoint_Line
+     (Context : Exec_Context;
+      Params : Word_Ptr;
+      Static_Link : Non_Op_Map_Type_Ptr);
+   pragma Export (Ada, Nth_Breakpoint_Line, "_psc_nth_breakpoint_line");
+
    procedure Type_Desc_At_Locator
      (Context : Exec_Context;
       Params : Word_Ptr;
@@ -1054,6 +1108,8 @@ package body PSC.Trees.Semantics.Translator is
       Params : Word_Ptr;
       Static_Link : Non_Op_Map_Type_Ptr);
    pragma Export (Ada, Info_Array_Indexing, "_psc_info_array_indexing");
+
+   ---------------
 
    function To_Word_Type (Sem : Root_Sem_Ptr) return Word_Type is
    --  Return "small" ParaSail object representation of a sem pointer
@@ -1599,6 +1655,30 @@ package body PSC.Trees.Semantics.Translator is
             Context.Server_Index));
          --  Word_Type (Location.Base) * 2**32 + Word_Type (Location.Offset));
    end Decl_Location;
+
+   procedure Decl_Component_Index
+     (Context : Exec_Context;
+      Params : Word_Ptr;
+      Static_Link : Non_Op_Map_Type_Ptr) is
+      --  func Component_Index(Decl) -> optional Offset_Within_Area
+      --   is import(#decl_component_index)
+      --   //  Returns offset if this is a component, otherwise null.
+      Decl_Sem : Root_Semantic_Info'Class renames
+        To_Root_Sem_Ptr (Fetch_Word (Params, 1)).all;
+      Result : Word_Type;
+   begin
+      --  Determine component index, if any associated with declaration
+      --  TBD: Need to worry about Module_Extension_Level as well.
+      if Decl_Sem in Object_Semantic_Info'Class
+        and then Object_Semantic_Info (Decl_Sem).Component_Index /= 0
+      then
+         Result := Word_Type (Object_Semantic_Info (Decl_Sem).Component_Index);
+      else
+         Result := Null_Value;
+      end if;
+      Store_Word
+        (Params, 0, Result);
+   end Decl_Component_Index;
 
    procedure Decl_Source_Pos
      (Context : Exec_Context;
@@ -2258,11 +2338,19 @@ package body PSC.Trees.Semantics.Translator is
       Instr : Instruction renames Nth_Instruction
         (Routine_Index (Instr_Index / 2**32),
          Code_Index (Instr_Index mod 2**32));
+      use Source_Positions;
+      Line : Line_Number := Instr.Source_Pos.Line;
    begin
+      if Line = 0 and then Instr.Source_Pos.End_Line > 0 then
+         --  There seems to be a breakpoint set on this line,
+         --  so fetch the "true" line number from the End_Line.
+         Line := Instr.Source_Pos.End_Line;
+      end if;
+
       Store_Word
         (Params, 0,
          Word_Type (Instr.Source_Pos.File) * 2**32 +
-         Word_Type (Instr.Source_Pos.Line) * 2**10 +
+         Word_Type (Line) * 2**10 +
          Word_Type (Instr.Source_Pos.Col));
    end Instruction_Source_Pos;
 
@@ -3944,6 +4032,201 @@ package body PSC.Trees.Semantics.Translator is
          To_Word_Type (Nth_Routine (Index)));
    end Routine_At_Index;
 
+   procedure Set_Breakpoint
+     (Context : Exec_Context;
+      Params : Word_Ptr;
+      Static_Link : Non_Op_Map_Type_Ptr) is
+      --   func Set_Breakpoint(Op : Routine; Line : Univ_Integer)
+      --     -> Breakpoint_Index
+      --     is import(#set_breakpoint);
+      --     //  Set a breakpoint at the given line within the given
+      --     //  routine; returns the index identifying the breakpoint.
+      --     //  If breakpoint already exists at given location,
+      --     //  the old breakpoint number is returned.
+      Op : constant Routine_Ptr :=
+        To_Routine_Ptr (Fetch_Word (Params, 1));
+      use Source_Positions;
+      Line_As_Word : constant Word_Type := Fetch_Word (Params, 2);
+      Line : Line_Number := 0;
+   begin
+      if Op = null or else Op.Code = null then
+         --  Bad routine provided
+         Store_Word (Params, 0, 0);
+      end if;
+
+      if Line_As_Word not in 1 .. Word_Type (Line_Number'Last) then
+         Messages.Put_Error
+           ("Bad Line Number in Set_Breakpoint: " &
+             Word_Type'Image (Line_As_Word),
+            Null_Source_Position,
+            Suppress_Duplicates => False);
+         Store_Word (Params, 0, 0);
+      end if;
+
+      --  OK, it is safe to do the conversion.
+      Line := Line_Number (Line_As_Word);
+
+      for B in 1 .. Last_Breakpoint loop
+         if Breakpoints (B).Op = Op
+           and then Breakpoints (B).Line = Line
+         then
+            --  Already a breakpoint at that location
+            Store_Word (Params, 0, Word_Type (B));
+            return;
+         end if;
+      end loop;
+
+      --  No existing breakpoint, add it to the table.
+      Last_Breakpoint := Last_Breakpoint + 1;
+      Breakpoints (Last_Breakpoint) := (Op => Op, Line => Line);
+
+      --  And set the breakpoint in the code
+      for I in 1 .. Op.Code.Code_Length loop
+         declare
+            Instr : Instruction renames Op.Code.Instrs (I);
+         begin
+            if Instr.Source_Pos.Line = Line then
+               --  Breakpoint indicator is line = 0 and End_Line > 0.
+               --  End_Col holds the breakpoint index.
+               Instr.Source_Pos.End_Line := Line;
+               Instr.Source_Pos.Line := 0;
+               Instr.Source_Pos.End_Col := Column_Number (Last_Breakpoint);
+            end if;
+         end;
+      end loop;
+
+      --  Return the breakpoint index
+      Store_Word (Params, 0, Word_Type (Last_Breakpoint));
+   end Set_Breakpoint;
+
+   procedure Clear_Breakpoint
+     (Context : Exec_Context;
+      Params : Word_Ptr;
+      Static_Link : Non_Op_Map_Type_Ptr) is
+      --   func Clear_Breakpoint(Index : Breakpoint_Index)
+      --     is import(#clear_breakpoint);
+      --     //  Clear the given breakpoint
+      Index_As_Word : constant Word_Type := Fetch_Word (Params, 0);
+
+      use Source_Positions;
+   begin
+      if Index_As_Word not in 1 .. Word_Type (Last_Breakpoint) then
+         --  Bad index
+         Messages.Put_Error
+           ("Bad Index in Clear_Breakpoint: " &
+             Word_Type'Image (Index_As_Word),
+            Null_Source_Position,
+            Suppress_Duplicates => False);
+         return;
+      end if;
+
+      declare
+         Index : constant Breakpoint_Index := Breakpoint_Index (Index_As_Word);
+         Brk : Breakpoint renames Breakpoints (Index);
+      begin
+         if Brk.Line = 0 then
+            Messages.Put_Error
+              ("Breakpoint already deleted in Clear_Breakpoint: " &
+                Breakpoint_Index'Image (Index),
+               Null_Source_Position,
+               Suppress_Duplicates => False);
+            return;
+         end if;
+
+         --  Now clear the breakpoint
+         for I in 1 .. Brk.Op.Code.Code_Length loop
+            declare
+               Instr : Instruction renames Brk.Op.Code.Instrs (I);
+            begin
+               if Instr.Source_Pos.Line = 0
+                 and then Instr.Source_Pos.End_Line = Brk.Line
+               then
+                  --  Breakpoint indicator is line = 0 and End_Line > 0.
+                  --  End_Col holds the breakpoint index.
+                  Instr.Source_Pos.Line := Brk.Line;
+                  Instr.Source_Pos.End_Line := 0;
+                  Instr.Source_Pos.End_Col := 0;
+               end if;
+            end;
+         end loop;
+
+         --  Indicate breakpoint has been cleared
+         Brk.Line := 0;
+      end;
+
+   end Clear_Breakpoint;
+
+   procedure Num_Breakpoints
+     (Context : Exec_Context;
+      Params : Word_Ptr;
+      Static_Link : Non_Op_Map_Type_Ptr) is
+      --   func Num_Breakpoints() -> Breakpoint_Index
+      --     is import(#num_breakpoints);
+      --     //  Returns a count of the number of breakpoints set (including
+      --     //  those that were set once, and have since been cleared).
+   begin
+      Store_Word (Params, 0, Word_Type (Last_Breakpoint));
+   end Num_Breakpoints;
+
+   procedure Nth_Breakpoint_Routine
+     (Context : Exec_Context;
+      Params : Word_Ptr;
+      Static_Link : Non_Op_Map_Type_Ptr) is
+      --   func Nth_Breakpoint_Routine(Index : Breakpoint_Index) -> Routine
+      --     is import(#nth_breakpoint_routine);
+      --     //  Returns the routine associated with the given breakpoint.
+      Index_As_Word : constant Word_Type := Fetch_Word (Params, 1);
+   begin
+      if Index_As_Word not in 1 .. Word_Type (Last_Breakpoint) then
+         --  Bad index
+         Messages.Put_Error
+           ("Bad Index in Nth_Breakpoint_Routine: " &
+             Word_Type'Image (Index_As_Word),
+            Source_Positions.Null_Source_Position,
+            Suppress_Duplicates => False);
+
+         Store_Word (Params, 0, Null_Value);
+         return;
+      end if;
+
+      declare
+         Index : constant Breakpoint_Index := Breakpoint_Index (Index_As_Word);
+         Brk : Breakpoint renames Breakpoints (Index);
+      begin
+         Store_Word (Params, 0, To_Word_Type (Routine_Ptr (Brk.Op)));
+      end;
+   end Nth_Breakpoint_Routine;
+
+   procedure Nth_Breakpoint_Line
+     (Context : Exec_Context;
+      Params : Word_Ptr;
+      Static_Link : Non_Op_Map_Type_Ptr) is
+      --   func Nth_Breakpoint_Line(Index : Breakpoint_Index) -> Univ_Integer
+      --     is import(#nth_breakpoint_line);
+      --     //  Returns the line# associated with the given breakpoint.
+      --     //  Returns 0 if breakpoint has already been cleared.
+      Index_As_Word : constant Word_Type := Fetch_Word (Params, 1);
+   begin
+      if Index_As_Word not in 1 .. Word_Type (Last_Breakpoint) then
+         --  Bad index
+         Messages.Put_Error
+           ("Bad Index in Nth_Breakpoint_Line: " &
+             Word_Type'Image (Index_As_Word),
+            Source_Positions.Null_Source_Position,
+            Suppress_Duplicates => False);
+
+         Store_Word (Params, 0, Null_Value);
+         return;
+      end if;
+
+      declare
+         Index : constant Breakpoint_Index := Breakpoint_Index (Index_As_Word);
+         Brk : Breakpoint renames Breakpoints (Index);
+      begin
+         Store_Word (Params, 0, Word_Type (Brk.Line));
+      end;
+   end Nth_Breakpoint_Line;
+
    procedure Type_Desc_At_Locator
      (Context : Exec_Context;
       Params : Word_Ptr;
@@ -5074,6 +5357,10 @@ begin  --  PSC.Trees.Semantics.Translator;
       Decl_Location'Access);
 
    Interpreter.Builtins.Register_Builtin
+     (Strings.String_Lookup ("#decl_component_index"),
+      Decl_Component_Index'Access);
+
+   Interpreter.Builtins.Register_Builtin
      (Strings.String_Lookup ("#global_const_value"),
       Global_Const_Value'Access);
 
@@ -5470,6 +5757,24 @@ begin  --  PSC.Trees.Semantics.Translator;
    Interpreter.Builtins.Register_Builtin
      (Strings.String_Lookup ("#routine_at_index"),
       Routine_At_Index'Access);
+
+   Interpreter.Builtins.Register_Builtin
+     (Strings.String_Lookup ("#set_breakpoint"), Set_Breakpoint'Access);
+
+   Interpreter.Builtins.Register_Builtin
+     (Strings.String_Lookup ("#clear_breakpoint"), Clear_Breakpoint'Access);
+
+   Interpreter.Builtins.Register_Builtin
+     (Strings.String_Lookup ("#num_breakpoints"),
+      Num_Breakpoints'Access);
+
+   Interpreter.Builtins.Register_Builtin
+     (Strings.String_Lookup ("#nth_breakpoint_routine"),
+      Nth_Breakpoint_Routine'Access);
+
+   Interpreter.Builtins.Register_Builtin
+     (Strings.String_Lookup ("#nth_breakpoint_line"),
+      Nth_Breakpoint_Line'Access);
 
    Interpreter.Builtins.Register_Builtin
      (Strings.String_Lookup ("#type_desc_at_locator"),

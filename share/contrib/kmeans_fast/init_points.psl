@@ -12,8 +12,11 @@ class Init_Points is
       Result := []
       var X : optional Univ_Real := null
 
-      func Use_Num(Half_A_Point : Univ_Real) is
-         if X is null then
+      func Use_Num(Half_A_Point : optional Univ_Real; Str : Univ_String) is
+         if Half_A_Point is null then
+            Println
+              ("Value in point #`(|Result|+1) in json file is bad: `(Str)")
+         elsif X is null then
             // First of a pair
             X := Half_A_Point
          else
@@ -27,7 +30,11 @@ class Init_Points is
       end func Use_Num
 
       var IO := IO::Get_IO()
-      var Input : File_Input_Stream := IO.Open("../kmeans/points.json")
+      var Input : optional File_Input_Stream := IO.Open("../kmeans/points.json")
+      if Input is null then
+         Println ("File not found: ../kmeans/points.json")
+         return []
+      end if
       var Buf : Univ_String := ""
       var Find_Num : Boolean := #true  // True when looking for start of num
       var Numeric : Countable_Set<Univ_Character> := '0' .. '9' | '.' | '-'
@@ -47,7 +54,7 @@ class Init_Points is
                if C not in Numeric then
                   //  Reached end of number -- use this number,
                   //  check if done, and reset if not
-                  Use_Num(From_String(Buf))
+                  Use_Num(From_String(Buf), Buf)
                   if |Result| >= Limit then
                      //  We have all the numbers we need
                      exit loop Outer

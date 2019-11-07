@@ -8,11 +8,17 @@
 -- ware  Foundation;  either version 3,  or (at your option) any later ver- --
 -- sion.  This software is distributed in the hope  that it will be useful, --
 -- but WITHOUT ANY WARRANTY;  without even the implied warranty of MERCHAN- --
--- TABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public --
--- License for  more details.  You should have  received  a copy of the GNU --
--- General  Public  License  distributed  with  this  software;   see  file --
--- COPYING3.  If not, go to http://www.gnu.org/licenses for a complete copy --
--- of the license.                                                          --
+-- TABILITY or FITNESS FOR A PARTICULAR PURPOSE.                            --
+--                                                                          --
+-- As a special exception under Section 7 of GPL version 3, you are granted --
+-- additional permissions described in the GCC Runtime Library Exception,   --
+-- version 3.1, as published by the Free Software Foundation. See           --
+-- documentation/COPYING3 and documentation/GCC_RUNTIME3_1 for details.     --
+--                                                                          --
+-- In particular,  you can freely  distribute your programs  built with     --
+-- the ParaSail, Sparkel, Javallel, or Parython compiler, including any     --
+-- required library run-time units written in Ada or in any of the above    --
+-- languages, using any licensing terms  of your choosing.                  --
 --                                                                          --
 -- The ParaSail language and implementation were originally developed by    --
 -- S. Tucker Taft.                                                          --
@@ -1092,8 +1098,11 @@ package body PSC.Interpreter.Builtins is
    procedure Int_Exponentiate_Exported
      (Context : Exec_Context;
       Params : Word_Ptr;
-      Static_Link : Non_Op_Map_Type_Ptr)
-     renames Int_Exponentiate.Define_Op.Builtin_Routine;
+      Static_Link : Non_Op_Map_Type_Ptr) is
+   begin
+      Int_Exponentiate.Define_Op.Builtin_Routine
+        (Context, Params, Static_Link);
+   end Int_Exponentiate_Exported;
 
    generic
       Name : String;
@@ -1124,8 +1133,11 @@ package body PSC.Interpreter.Builtins is
    procedure Int_Assign_Exponentiate_Exported
      (Context : Exec_Context;
       Params : Word_Ptr;
-      Static_Link : Non_Op_Map_Type_Ptr)
-     renames Int_Assign_Exponentiate.Define_Op.Builtin_Routine;
+      Static_Link : Non_Op_Map_Type_Ptr) is
+   begin
+      Int_Assign_Exponentiate.Define_Op.Builtin_Routine
+        (Context, Params, Static_Link);
+   end Int_Assign_Exponentiate_Exported;
 
    ------------------
    -- Word_Compare --
@@ -1982,7 +1994,8 @@ package body PSC.Interpreter.Builtins is
             Messages.Put_Error
               ("Basic_Array::Create length =" &
                Word_Type'Image (Len) & " too large, limit =" &
-               Offset_Within_Area'Image (Max_Basic_Array_Len),
+               Offset_Within_Area'Image (Max_Basic_Array_Len) &
+               "; Try Big_Array instead",
                Src_Pos => Execution_Source_Pos);
             pragma Warnings (Off);
             pragma Assert (Len <= Max_Basic_Array_Len);  --  Will fail

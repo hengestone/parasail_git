@@ -8,11 +8,17 @@
 -- ware  Foundation;  either version 3,  or (at your option) any later ver- --
 -- sion.  This software is distributed in the hope  that it will be useful, --
 -- but WITHOUT ANY WARRANTY;  without even the implied warranty of MERCHAN- --
--- TABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public --
--- License for  more details.  You should have  received  a copy of the GNU --
--- General  Public  License  distributed  with  this  software;   see  file --
--- COPYING3.  If not, go to http://www.gnu.org/licenses for a complete copy --
--- of the license.                                                          --
+-- TABILITY or FITNESS FOR A PARTICULAR PURPOSE.                            --
+--                                                                          --
+-- As a special exception under Section 7 of GPL version 3, you are granted --
+-- additional permissions described in the GCC Runtime Library Exception,   --
+-- version 3.1, as published by the Free Software Foundation. See           --
+-- documentation/COPYING3 and documentation/GCC_RUNTIME3_1 for details.     --
+--                                                                          --
+-- In particular,  you can freely  distribute your programs  built with     --
+-- the ParaSail, Sparkel, Javallel, or Parython compiler, including any     --
+-- required library run-time units written in Ada or in any of the above    --
+-- languages, using any licensing terms  of your choosing.                  --
 --                                                                          --
 -- The ParaSail language and implementation were originally developed by    --
 -- S. Tucker Taft.                                                          --
@@ -155,6 +161,48 @@ package body PSC.Interpreter is
    --  Will be set to null in Install_Code if we install code whose
    --  full name matches Languages.Debug_Console_Full_Name.
 
+   type Single_Step_Indicator is range -3 .. 100;
+      --  Indicator returned from invocation of debugger console
+      --  to indicate what should happen upon return:
+   Stop_Execution : constant Single_Step_Indicator := -3;
+      --  Exit the program upon return from the debugger.
+   Single_Step_Into : constant Single_Step_Indicator := -2;
+      --  Return to the debugger as soon as leaving the current line
+      --  including by calling another routine or returning.
+   Single_Step_Over : constant Single_Step_Indicator := -1;
+      --  Return to the debugger as soon as leaving the current line,
+      --  but "step over" any calls.
+   Continue_Execution : constant Single_Step_Indicator := 0;
+      --  Continue until hitting a breakpoint or an assertion failure.
+   subtype Step_Out is Single_Step_Indicator
+     range 1 .. Single_Step_Indicator'Last;
+      --  Stop upon exiting the specified number of stack frames.
+
+   type Debugger_Reason is range -8 .. Single_Step_Indicator'Last;
+      --  Indicates the reason the debugger console was invoked,
+      --  passed as a parameter to Invoke_Debug_Console.
+   No_Reason : Debugger_Reason := 0;
+      --  Should not occur
+   Step_Over_Finished : Debugger_Reason := -1;
+      --  A Step-Over just completed
+   Step_Into_Finished : Debugger_Reason := -2;
+      --  A Step-Into just completed
+   Step_Out_Finished : Debugger_Reason := -3;
+      --  A Step-Out just complerted
+   Step_Over_Exited_Frame : Debugger_Reason := -4;
+      --  A Step-Over exited the frame (e.g. did a "return")
+   Step_Into_Exited_Frame : Debugger_Reason := -5;
+      --  A Step-Into exited the frame (e.g. did a "return")
+   Assertion_Failure : Debugger_Reason := -6;
+      --  ParaSail Assertion failed
+   Null_Check_Failure : Debugger_Reason := -7;
+      --  Null check failed
+   Internal_Failure : Debugger_Reason := -8;
+      --  Internal failure within interpreter
+   subtype Breakpoint_Encountered is Debugger_Reason
+     range 1 .. Debugger_Reason'Last;
+      --  Index of breakpoint reached
+
    ----------------------------------------------------------------
    -- Built-in-operation registration table and associated types --
    ----------------------------------------------------------------
@@ -200,7 +248,13 @@ package body PSC.Interpreter is
 
       type Longest_Natural is range 0 .. System.Max_Int;
 
-      Server_Stack_Size : constant := 500_000;
+      Server_Stack_Size : constant := 1_000_000;
+      --  Size of stack (in bytes, aka "storage elements")
+      --  for each work-stealing "server" task.
+
+      Max_Bypassed_Init_Recursion : constant := 15;
+      --  No more than 15 levels of recursion when bypassing
+      --  thread initiation.
 
       Num_Initial_Thread_Servers : constant := 1;
       --  Number of Ada tasks initially started up to serve threads
@@ -210,13 +264,21 @@ package body PSC.Interpreter is
       --  Minimum number of servers that should be available for
       --  actively executing code.
 
+      Enough_Unshared_Threads : constant := 4;
+      --  Minimum number of unshared threads needed for work-stealing
+      --  to work reasonably.
+
       type Master_Index is
         range 0 .. 2 ** 15 - 1;
       --  Unique index of active master; used as index into Master_Extras
       --  table.
 
+      type Master_Reuse_Counter is mod 2**16;
+      --  This counts how often a given master record is reused.
+      --  It wraps around if necessary.
+
       type Server_State;
-      type Server_State_Ptr is access constant Server_State;
+      type Server_State_Ptr is access all Server_State;
 
       type Server_State is record
       --  We keep this information on each server (for debugging)
@@ -227,8 +289,21 @@ package body PSC.Interpreter is
          Src_Pos            : Source_Positions.Source_Position :=
                                 Source_Positions.Null_Source_Position;
          Locked_Param_Index : Natural := 0;
+         Step_Indicator     : Single_Step_Indicator := Continue_Execution;
+         Stopped_At_Line    : Source_Positions.Line_Number := 0;
          Prev_State         : Server_State_Ptr := null;
       end record;
+
+      Null_Server_State : constant Server_State :=
+        (Code               => null,
+         Context            => null,
+         Pc                 => 0,
+         Start_Pc           => 0,
+         Src_Pos            => Source_Positions.Null_Source_Position,
+         Locked_Param_Index => 0,
+         Step_Indicator     => Continue_Execution,
+         Stopped_At_Line    => 0,
+         Prev_State         => null);
 
       type Thread_Category is
         (Locked_Thread, Queuing_Thread, Nonqueuing_Thread);
@@ -307,6 +382,7 @@ package body PSC.Interpreter is
          Master_Is_Shared : Boolean                := False;
          --  If True, then Master is visible to multiple server tasks,
          --  and master should only be manipulated when in a protected action.
+         pragma Atomic (Master_Is_Shared);
 
          Master_Never_Shared : Boolean             := False;
          --  If True, then this Master should never be shared with another
@@ -321,11 +397,20 @@ package body PSC.Interpreter is
          --  is shared, or of the innermost enclosing master if this master
          --  is not shared.
 
+         Reuse_Count      : Master_Reuse_Counter := 0;
+         --  This is bumped each time this master record is taken off
+         --  the free list, so that the combination of the master index
+         --  and this count is unique (unless this wraps around).
+
          Exiting_Tcb      : Word_Ptr := null;
          --  If innermost shared master has the "Exit_Requested" flag set,
          --  then this will be the address of the Tcb that initiated the exit,
          --  and hence is the only sub-thread of the master that should
          --  be allowed to proceed.
+
+         State_Of_Master  : aliased Server_State;
+         --  The state of the server at the time when the master
+         --  is initialized.
       end record;
 
       type Master_Extra_Array_Type is
@@ -341,8 +426,9 @@ package body PSC.Interpreter is
          Current_State      : aliased Server_State;
          --  Current state of given server (mostly for debugging)
 
-         Last_State         : Server_State;
-         --  State just prior to return (used for Check_Nested_Block_Op)
+         Last_Src_Pos       : Source_Positions.Source_Position :=
+           Source_Positions.Null_Source_Position;
+         --  Source-Pos just prior to return (used for Check_Nested_Block_Op)
 
          Last_Active_Thread : Thread_Queue_Head := null;
          --  Most recent active thread
@@ -361,6 +447,8 @@ package body PSC.Interpreter is
 
          --  Per-server statistics
          Num_Unshared_Thread_Initiations : Natural := 0;
+         Num_Bypassed_Thread_Initiations : Natural := 0;
+         Bypassed_Init_Recursion_Level   : Natural := 0;
          Max_Waiting_Unshared_Threads    : Thread_Count_Base := 0;
          Num_Waiting_Unshared_Summed     : Longest_Natural := 0;
          Num_Threads_In_Process          : Natural := 0;
@@ -433,6 +521,12 @@ package body PSC.Interpreter is
          --      made it to getting a thread to serve.
          entry Start;
       end Server_Creator;
+
+      function Caller_Of (State : Server_State) return Server_State_Ptr;
+      --  Return pointer to server state for caller of given stack frame.
+      --  Normally this is just State.Prev_State, but if we are crossing
+      --  pico-thread boundaries, we need to retrieve the state from
+      --  the enclosing master.
 
       procedure Dump_One_Thread
         (Tcb    : Word_Ptr;
@@ -524,6 +618,12 @@ package body PSC.Interpreter is
    Lowest_Virt_Addr    : Object_Virtual_Address :=
                            Object_Virtual_Address'Last;
    Highest_Virt_Addr   : Object_Virtual_Address :=
+                           Object_Virtual_Address'First;
+
+   --  Range of addresses covered by stack-based objects
+   Lowest_Stack_Addr    : Object_Virtual_Address :=
+                           Object_Virtual_Address'Last;
+   Highest_Stack_Addr   : Object_Virtual_Address :=
                            Object_Virtual_Address'First;
 
    Min_Chunk_Size : constant Offset_Within_Chunk := 1024;
@@ -635,7 +735,8 @@ package body PSC.Interpreter is
       Size      : Offset_Within_Area := 0; --  64K size limit (in 64-bit words)
       Stg_Rgn   : Stg_Rgn_Index      := 0; --  16 bit unique region index
       Type_Info : Type_Index         := 0; --  16 bit unique type index
-      Lock_Obj  : Lock_Obj_Index     := 0; --  16 bit unique lock index
+      Lock_Obj  : Lock_Obj_Index     := 0; --  15 bit unique lock index
+      On_Stack  : Boolean            := False;  --  1 bit on-stack flag
    end record;
 
    for Large_Obj_Header use record
@@ -645,7 +746,8 @@ package body PSC.Interpreter is
       Size      at 0 range  0 .. 15;
       Stg_Rgn   at 0 range 16 .. 31;
       Type_Info at 0 range 32 .. 47;
-      Lock_Obj  at 0 range 48 .. 63;
+      Lock_Obj  at 0 range 48 .. 62;
+      On_Stack  at 0 range 63 .. 63;
    end record;
 
    for Large_Obj_Header'Size use Word_Size * Large_Obj_Header_Size;
@@ -902,7 +1004,8 @@ package body PSC.Interpreter is
       Static_Link_Locator : Object_Locator) return Word_Ptr;
    --  Get pointer to enclosing local area or enclosing type
 
-   procedure Invoke_Debug_Console (Context : in out Exec_Context);
+   procedure Invoke_Debug_Console (Context : in out Exec_Context;
+                                   Reason : Debugger_Reason);
    --  Invoke the debugging console.
    --  Pause other servers while the console is executing.
 
@@ -1014,6 +1117,11 @@ package body PSC.Interpreter is
    --  We want to select ancestor part of polymorphic object (identified by
    --  Source), of type specified by Type_Info, and place (non-polymorphic)
    --  object in Destination.
+
+   function Shallow_Copy_Large_Obj
+     (Context   : Exec_Context;
+      Stack_Val : Word_Type) return Word_Type;
+   --  Copy top level of large stack-resident object into local stg_rgn
 
    function Get_Large_Obj_Type_Descriptor
       (Obj : Word_Type) return Non_Op_Map_Type_Ptr;
@@ -1203,6 +1311,10 @@ package body PSC.Interpreter is
          return Object_Virtual_Address;
       --  Return link to next block in free-block chain
 
+      function Large_Obj_On_Stack
+        (Addr : Object_Virtual_Address) return Boolean;
+      --  Return True if given non-null large obj is residing on stack
+
       function Large_Obj_Size
         (Large_Obj_Addr : Object_Address)
          return Offset_Within_Chunk;
@@ -1248,7 +1360,8 @@ package body PSC.Interpreter is
          Size           : Offset_Within_Area;
          Stg_Rgn_Id     : Stg_Rgn_Index;
          Type_Id        : Type_Index;
-         Lock_Obj       : Lock_Obj_Index := 0);
+         Lock_Obj       : Lock_Obj_Index := 0;
+         On_Stack       : Boolean := False);
       --  Fill in header given large object address, and size/region/type
       --  information
 
@@ -1257,7 +1370,8 @@ package body PSC.Interpreter is
          Size           : Offset_Within_Area;
          Stg_Rgn_Id     : Stg_Rgn_Index;
          Type_Id        : Type_Index;
-         Lock_Obj       : Lock_Obj_Index := 0);
+         Lock_Obj       : Lock_Obj_Index := 0;
+         On_Stack       : Boolean := False);
       --  Fill in header given large object address, and size/region/type
       --  information
 
@@ -1285,6 +1399,11 @@ package body PSC.Interpreter is
         (Large_Obj_Addr : Object_Virtual_Address;
          Next_Block     : Object_Virtual_Address);
       --  Set link to next block in free-block chain
+
+      procedure Set_Large_Obj_On_Stack
+        (Large_Obj_Addr : Object_Virtual_Address;
+         On_Stack       : Boolean);
+      --  Indicate whether given object resides on stack rather than in stg rgn
 
       procedure Set_Large_Obj_Size
         (Large_Obj_Addr : Object_Address;
@@ -1392,6 +1511,12 @@ package body PSC.Interpreter is
       --  *not* complete and instead is waiting for a dequeue condition to
       --  be satisfied.
 
+      procedure Execute_Compiled_Code_Immediately
+        (Context : in out Exec_Context; New_Tcb : Word_Ptr);
+      --  Execute compiled code specified in thread control block,
+      --  piggybacking on existing context rather than spawning a new thread.
+      --  No locking param allowed.
+
       function Prepare_To_Exit
         (Thread_Master    : Word_Ptr;
          Server_Index     : Thread_Server_Index;
@@ -1410,8 +1535,8 @@ package body PSC.Interpreter is
          --  Return True if Exit has been requested for given master/tcb
 
       procedure Spawn_Thread
-        (Thread_Master : Word_Ptr;
-         Server_Index  : Thread_Server_Index;
+        (Context       : in out Exec_Context;
+         Thread_Master : Word_Ptr;
          New_Tcb       : Word_Ptr;
          Spawning_Tcb  : Word_Ptr);
       --  Add a thread to queue of threads waiting for service
@@ -1473,6 +1598,9 @@ package body PSC.Interpreter is
       --        negative value.
       Num_Active : Integer := 1;  --  Main thread is active from the start
       Max_Active : Natural := 1;
+
+      Num_Masters : Natural := 0;
+      Num_Shared_Masters : Natural := 0;
 
       --  This counts number of masters with the parent thread
       --  waiting on them.
@@ -1539,7 +1667,11 @@ package body PSC.Interpreter is
       --  An enumeration of the possible states of a picothread
       type Thread_State_Enum is
         (Initial_State, Unknown_State, Running, Waiting_For_Master,
-         On_Server_Queue, On_Lock_Queue, On_Delay_Queue, Final_State);
+         On_Server_Unshared_Queue, On_Server_Shared_Queue,
+         On_Lock_Queue, On_Delay_Queue, Final_State);
+
+      subtype On_Server_Queue is Thread_State_Enum
+        range On_Server_Unshared_Queue .. On_Server_Shared_Queue;
 
       type Tcb_Info_Rec (For_Compiled_Routine : Boolean := False) is record
 
@@ -1653,8 +1785,9 @@ package body PSC.Interpreter is
 
       procedure Add_To_Deque
         (Deque   : in out Thread_Deque_Head;
-         New_Tcb : Word_Ptr);
-      --  Add Tcb to end of deque
+         New_Tcb : Word_Ptr;
+         Is_Shared : Boolean);
+      --  Add Tcb to end of deque; Is_Shared indicates whether queue is shared
 
       procedure Remove_From_Deque
         (Deque             : in out Thread_Deque_Head;
@@ -1931,9 +2064,12 @@ package body PSC.Interpreter is
       --  If this is greater than zero, then this many threads should be
       --  moved to the shared queue.
 
-      Num_Servers_Waiting_For_Masters : Thread_Count := 0;
+      Num_Servers_Waiting_For_Masters : Natural := 0;
       --  Number of servers currently on one of the
       --  Get_Thread_Or_Wait_For_Threads_Internal queues.
+
+      Max_Servers_Waiting_For_Masters : Natural := 0;
+      --  Maximum number of servers ever waiting.
 
       Solo_Server : Thread_Server_Index_Base := 0;
       --  This is set non-zero when a server is asking all other servers
@@ -2022,7 +2158,13 @@ package body PSC.Interpreter is
       --      Instead we are just making sure we have some waiting
       --      for new threads to be created.
 
-      procedure Spawn_Thread
+      procedure Add_To_Shared_Master
+        (Thread_Master : Word_Ptr;
+         Server_Index  : Thread_Server_Index;
+         New_Tcb       : Word_Ptr);
+         --  Link TCB onto chain off shared master
+
+      procedure Spawn_Shared_Thread
         (Thread_Master : Word_Ptr;
          Server_Index  : Thread_Server_Index;
          New_Tcb       : Word_Ptr;
@@ -2337,8 +2479,21 @@ package body PSC.Interpreter is
                end;
             end if;
 
-            --  Overwrite destination
-            Store_Word (Destination, 0, New_Value);
+            if Large_Obj_On_Stack (New_Value)
+              and then
+               (not Large_Obj_On_Stack (Old_Value)
+                  or else Stg_Rgn_Of_Large_Obj (New_Value) /=
+                          Stg_Rgn_Of_Large_Obj (Old_Value))
+            then
+               --  Overwrite destination with shallow copy of new value
+               --  since old value is not also on the stack, or is
+               --  associated with a different region.
+               Store_Word (Destination, 0,
+                 Shallow_Copy_Large_Obj (Context, New_Value));
+            else
+               --  Overwrite destination
+               Store_Word (Destination, 0, New_Value);
+            end if;
 
             --  Now release storage of prior value
             --  NOTE: We do it in this order so we never
@@ -2947,7 +3102,10 @@ package body PSC.Interpreter is
    begin
       if Virt_Is_Phys then
          if (Large_Obj_Value mod Word_SU_Size = 0
-             and then Large_Obj_Value in Lowest_Virt_Addr .. Highest_Virt_Addr)
+             and then
+               (Large_Obj_Value in Lowest_Virt_Addr .. Highest_Virt_Addr
+                  or else
+                Large_Obj_Value in Lowest_Stack_Addr .. Highest_Stack_Addr))
            or else Is_Special_Large_Value (Large_Obj_Value)
          then
             return;  --  OK
@@ -2996,7 +3154,7 @@ package body PSC.Interpreter is
                   Use_Cur_Err => True);
 
                --  Invoke the debugging console if available.
-               Invoke_Debug_Console (Context);
+               Invoke_Debug_Console (Context, Reason => Null_Check_Failure);
 
             end if;
          end;
@@ -4488,9 +4646,16 @@ package body PSC.Interpreter is
       elsif Stg_Rgn_Of_Large_Obj (LHS_Value) =
             Stg_Rgn_Of_Large_Obj (RHS_Value)
       then
-         --  Stg_Rgns match, just move value and set RHS to appropriate
+         --  Stg_Rgns match, do a shallow copy if RHS on stack and LHS isn't,
+         --  and then move value into LHS and set RHS to appropriate
          --  null for region.
-         Finish_Large_Move (RHS_Value);
+         if Large_Obj_On_Stack (RHS_Value)
+           and then not Large_Obj_On_Stack (LHS_Value)
+         then
+            Finish_Large_Move (Shallow_Copy_Large_Obj (Context, RHS_Value));
+         else
+            Finish_Large_Move (RHS_Value);
+         end if;
 
       elsif Is_Special_Large_Value (RHS_Value) then
          --  RHS is a "special" large object; just need to change the region
@@ -4798,8 +4963,13 @@ package body PSC.Interpreter is
                  Old_Value_Stg_Rgn, Server_Index);
             end if;
 
-            Deallocate_From_Stg_Rgn
-              (Old_Value_Stg_Rgn, Old_Value, Server_Index);
+            if not Large_Obj_On_Stack (Old_Value) then
+               --  Do not release objects on stack
+               --  as they might be declared inside a loop
+               --  and hence reused on next iteration of loop.
+               Deallocate_From_Stg_Rgn
+                 (Old_Value_Stg_Rgn, Old_Value, Server_Index);
+            end if;
          end;
       end if;
    end Release_Large_Obj;
@@ -5150,6 +5320,39 @@ package body PSC.Interpreter is
       return To_Type_Desc (Large_Obj_Type_Info (Obj));
    end Get_Large_Obj_Type_Descriptor;
 
+   ----------------------------
+   -- Shallow_Copy_Large_Obj --
+   ----------------------------
+
+   function Shallow_Copy_Large_Obj
+     (Context   : Exec_Context;
+      Stack_Val : Word_Type) return Word_Type is
+   --  Copy top level of large stack-resident object into local stg_rgn
+
+      Obj_Header : Large_Obj_Header := To_Large_Obj_Ptr (Stack_Val).all;
+      pragma Assert (Obj_Header.On_Stack);
+
+      Obj_Size : constant Offset_Within_Area := Obj_Header.Size;
+      New_Obj : constant Word_Type :=
+        Allocate_From_Stg_Rgn
+          (Stg_Rgn_Table (Obj_Header.Stg_Rgn), Obj_Size, Context.Server_Index);
+         --  Allocate in same region as stack-resident object
+
+      Old_Obj_Ptr : constant Word_Ptr := Word_To_Word_Ptr (Stack_Val);
+      New_Obj_Ptr : constant Word_Ptr := Word_To_Word_Ptr (New_Obj);
+   begin
+      --  Set the new obj header with On_Stack off.
+      Obj_Header.On_Stack := False;
+      To_Large_Obj_Ptr (New_Obj).all := Obj_Header;
+
+      --  Copy the rest of the object
+      for Offset in Large_Obj_Header_Size .. Obj_Size - 1 loop
+         Store_Word (New_Obj_Ptr, Offset, Fetch_Word (Old_Obj_Ptr, Offset));
+      end loop;
+
+      return New_Obj;
+   end Shallow_Copy_Large_Obj;
+
    ----------------
    -- Share_Lock --
    ----------------
@@ -5293,49 +5496,67 @@ package body PSC.Interpreter is
    is
       Type_Desc     : constant Type_Descriptor_Ptr :=
                         Get_Type_Desc (Context, Type_Info);
-      LHS_Value     : constant Word_Type := Fetch_Word (Context, LHS);
-      RHS_Value     : constant Word_Type := Fetch_Word (Context, RHS);
+      LHS_Value     : Word_Type := Fetch_Word (Context, LHS);
+      RHS_Value     : Word_Type := Fetch_Word (Context, RHS);
       Type_Is_Small : constant Boolean := Is_Small (Type_Desc);
    begin
-      if not Type_Is_Small then
+      if Type_Is_Small then
+         --  Just swap the small values
+         Store_Word (Context, LHS, RHS_Value);
+         Store_Word (Context, RHS, LHS_Value);
+      else
+         --  Swap large values; see if in same region
          Check_Is_Large (LHS_Value);
          Check_Is_Large (RHS_Value);
-      end if;
 
-      if not Type_Is_Small
-        and then Stg_Rgn_Of_Large_Obj (LHS_Value) /=
+         if Stg_Rgn_Of_Large_Obj (LHS_Value) /=
                  Stg_Rgn_Of_Large_Obj (RHS_Value)
-      then
-         --  Need to copy both and free both old values
-         declare
-            LHS_Copy : constant Word_Type :=
-              Copy_Large_Obj
-                 (Type_Desc,
-                  LHS_Value,
-                  Stg_Rgn_Of_Large_Obj (RHS_Value),
-                  Context.Server_Index);
-            RHS_Copy : constant Word_Type :=
-              Copy_Large_Obj
-                 (Type_Desc,
-                  RHS_Value,
-                  Stg_Rgn_Of_Large_Obj (LHS_Value),
-                  Context.Server_Index);
-         begin
-            --  Do the swap
-            Store_Word (Context, LHS, RHS_Copy);
-            Store_Word (Context, RHS, LHS_Copy);
+         then
+            --  Need to copy both and free both old values
+            declare
+               LHS_Copy : constant Word_Type :=
+                 Copy_Large_Obj
+                    (Type_Desc,
+                     LHS_Value,
+                     Stg_Rgn_Of_Large_Obj (RHS_Value),
+                     Context.Server_Index);
+               RHS_Copy : constant Word_Type :=
+                 Copy_Large_Obj
+                    (Type_Desc,
+                     RHS_Value,
+                     Stg_Rgn_Of_Large_Obj (LHS_Value),
+                     Context.Server_Index);
+            begin
+               --  Do the swap
+               Store_Word (Context, LHS, RHS_Copy);
+               Store_Word (Context, RHS, LHS_Copy);
 
-            --  Now release the storage
-            --  NOTE: We do it in this order so we never
-            --       have an object pointing at freed storage.
-            --       Also, it means we could reclaim the storage
-            --       in the background (e.g. in a separate thread).
-            Release_Large_Obj (Type_Desc, LHS_Value,
-              Server_Index => Context.Server_Index);
-            Release_Large_Obj (Type_Desc, RHS_Value,
-              Server_Index => Context.Server_Index);
-         end;
-      else
+               --  Now release the storage
+               --  NOTE: We do it in this order so we never
+               --       have an object pointing at freed storage.
+               --       Also, it means we could reclaim the storage
+               --       in the background (e.g. in a separate thread).
+               Release_Large_Obj (Type_Desc, LHS_Value,
+                 Server_Index => Context.Server_Index);
+               Release_Large_Obj (Type_Desc, RHS_Value,
+                 Server_Index => Context.Server_Index);
+            end;
+         else
+            --  Check whether one is on the stack while the other isn't.
+            --  If so we need to do a shallow copy of the one on the stack,
+            --  in case we are inside a loop and the stack-based value would
+            --  need to be re-used.
+            if Large_Obj_On_Stack (LHS_Value) then
+               if not Large_Obj_On_Stack (RHS_Value) then
+                  --  LHS is on the stack but RHS is not; make a shallow copy
+                  LHS_Value := Shallow_Copy_Large_Obj (Context, LHS_Value);
+               end if;
+            elsif Large_Obj_On_Stack (RHS_Value) then
+               --  RHS is on the stack, and LHS is not
+               RHS_Value := Shallow_Copy_Large_Obj (Context, RHS_Value);
+            end if;
+         end if;
+
          --  No need to reclaim storage; just swap values
          Store_Word (Context, LHS, RHS_Value);
          Store_Word (Context, RHS, LHS_Value);
@@ -5363,8 +5584,12 @@ package body PSC.Interpreter is
       end if;
 
       if not Type_Is_Small
-        and then Stg_Rgn_Of_Large_Obj (LHS_Value) /=
-                 Stg_Rgn_Of_Large_Obj (RHS_Value)
+        and then (Stg_Rgn_Of_Large_Obj (LHS_Value) /=
+                    Stg_Rgn_Of_Large_Obj (RHS_Value)
+                       or else
+                  Large_Obj_On_Stack (LHS_Value)
+                       or else
+                  Large_Obj_On_Stack (RHS_Value))
       then
          --  Need to copy both and free both old values
          declare
@@ -5514,7 +5739,8 @@ package body PSC.Interpreter is
          --  Add to end of chain
          Add_To_Deque
            (Server_Info_Array (Server_Index).Shared_Threads (Category),
-            New_Tcb);
+            New_Tcb,
+            Is_Shared => True);
 
          --  One more waiting thread
          Num_Waiting_Shared_Threads := Num_Waiting_Shared_Threads + 1;
@@ -5552,13 +5778,6 @@ package body PSC.Interpreter is
                Ancestor := Master_Extras (Ancestor).Enclosing_Master;
             end loop;
          end;
-
-         --  We bumped Num_Waiting_Shared_Threads so
-         --  now we recompute Num_Shared_Threads_Needed.
-         Num_Shared_Threads_Needed :=
-           Thread_Count'Max (0,
-             Get_Thread'Count + Num_Servers_Waiting_For_Masters -
-               Num_Waiting_Shared_Threads);
 
          --  Accumulate statistics
          if Num_Waiting_Shared_Threads > Max_Waiting_Shared_Threads then
@@ -5764,7 +5983,7 @@ package body PSC.Interpreter is
          --  Accumulate statistics
          Num_Active := Integer'Max (0,
            Integer (Last_Server_Index - Main_Thread_Server_Index + 1)
-             - Get_Thread'Count - Integer (Num_Servers_Waiting_For_Masters));
+             - Get_Thread'Count - Num_Servers_Waiting_For_Masters);
 
          if Num_Active > Max_Active then
             Max_Active := Num_Active;
@@ -6053,8 +6272,10 @@ package body PSC.Interpreter is
       is
       begin
          if not Is_Shut_Down then
-            Put_Line ("All but server" &
-              Thread_Server_Index'Image (Server_Index) & " have paused.");
+            if Debug_Threading then
+               Put_Line ("All but server" &
+                 Thread_Server_Index'Image (Server_Index) & " have paused.");
+            end if;
             Delay_Queue.Pause_Delay_Queue;  --  Now stop the delay queue
          end if;
       end Wait_For_Other_Servers_To_Pause;
@@ -6108,6 +6329,10 @@ package body PSC.Interpreter is
             Flush;
          end if;
       exception
+         when Storage_Error =>
+            --  Not much to do here
+            raise;
+
          when E : others =>
             Messages.Put_RT_Error
               ("Finish_Thread: " &
@@ -6165,8 +6390,8 @@ package body PSC.Interpreter is
            and then Num_Shared_Threads_Needed = 0
          then
             --  Indicate we need at least one shared thread
-            Num_Shared_Threads_Needed :=
-              Get_Thread'Count + Num_Servers_Waiting_For_Masters + 1;
+            Num_Shared_Threads_Needed := Thread_Count
+              (Get_Thread'Count + Num_Servers_Waiting_For_Masters + 1);
 
             --  Now try again
             requeue Get_Thread with abort;
@@ -6266,15 +6491,21 @@ package body PSC.Interpreter is
          Num_Servers_Waiting_For_Masters :=
            Num_Servers_Waiting_For_Masters + 1;
 
+         if Num_Servers_Waiting_For_Masters > Max_Servers_Waiting_For_Masters
+         then
+            --  We have a new "max"
+            Max_Servers_Waiting_For_Masters := Num_Servers_Waiting_For_Masters;
+         end if;
+
          if Num_Shared_Threads_Needed = 0
            and then
              Num_Waiting_Shared_Threads <
-              (Num_Servers_Waiting_For_Masters + Get_Thread'Count)
+              Thread_Count (Num_Servers_Waiting_For_Masters + Get_Thread'Count)
          then
             --  We need at least one shared thread to serve for each waiter.
-            Num_Shared_Threads_Needed :=
-              Get_Thread'Count + Num_Servers_Waiting_For_Masters -
-                Num_Waiting_Shared_Threads;
+            Num_Shared_Threads_Needed := Thread_Count'Max (1, Thread_Count
+              (Get_Thread'Count + Num_Servers_Waiting_For_Masters) -
+                Num_Waiting_Shared_Threads);
          end if;
 
          --  Verify that Owned_By_Server is properly initialized
@@ -6384,9 +6615,13 @@ package body PSC.Interpreter is
       --  Attempt to move threads from server's unshared deque
       --  to the shared deque of threads.
          use Thread_Manager_Data;
+         Num_Needed : Thread_Count := Num_Shared_Threads_Needed;
          Info : Server_Info renames Server_Info_Array (Server_Index);
       begin
-         while Num_Shared_Threads_Needed > 0
+         --  Set to zero now to prevent additional calls from other servers
+         Num_Shared_Threads_Needed := 0;
+
+         while Num_Needed > 0
            and then Info.Unshared_Threads.Count > 0
          loop
             --  Move oldest unshared thread to the shared thread queue
@@ -6418,8 +6653,7 @@ package body PSC.Interpreter is
                           Master_Index'Image (Encloser) & " as shared");
                      end if;
 
-                     --  Mark encloser as shared.  All of its
-                     --  subthreads will be moved to the shared queues.
+                     --  Mark encloser as shared.
                      Encloser_Extra.Master_Is_Shared := True;
 
                      --  Update indicator of innermost shared master
@@ -6470,8 +6704,18 @@ package body PSC.Interpreter is
                      --  Tcb_To_Move is null, or another thread to be moved
                   end;
                end loop;
+
+               --  Add_To_Shared_Deque bumped Num_Waiting_Shared_Threads so
+               --  now we recompute number of shared threads needed.
+               Num_Needed :=
+                 Thread_Count'Max (0, Thread_Count
+                   (Get_Thread'Count + Num_Servers_Waiting_For_Masters) -
+                     Num_Waiting_Shared_Threads);
             end;
          end loop;
+
+         --  Now update the global
+         Num_Shared_Threads_Needed := Num_Needed;
       end Increase_Shared_Threads;
 
       ---------------------
@@ -6803,11 +7047,25 @@ package body PSC.Interpreter is
          Shut_Down_Now := Is_Shut_Down;
       end Spawn_New_Server;
 
-      ------------------
-      -- Spawn_Thread --
-      ------------------
+      --------------------------
+      -- Add_To_Shared_Master --
+      --------------------------
 
-      procedure Spawn_Thread
+      procedure Add_To_Shared_Master
+        (Thread_Master : Word_Ptr;
+         Server_Index  : Thread_Server_Index;
+         New_Tcb       : Word_Ptr) is
+         --  Link TCB onto chain off shared master
+      begin
+         --  Just pass the buck to the unshared version, with a lock
+         Add_To_Master (Thread_Master, Server_Index, New_Tcb);
+      end Add_To_Shared_Master;
+
+      -------------------------
+      -- Spawn_Shared_Thread --
+      -------------------------
+
+      procedure Spawn_Shared_Thread
         (Thread_Master : Word_Ptr;
          Server_Index  : Thread_Server_Index;
          New_Tcb       : Word_Ptr;
@@ -6825,7 +7083,7 @@ package body PSC.Interpreter is
       begin
          if Debug_Threading then
             Put_Line
-              ("Spawn_Thread for Server" &
+              ("Spawn_Shared_Thread for Server" &
                Thread_Server_Index'Image (Server_Index) &
                ", TCB at " &
                Hex_Image (New_Tcb));
@@ -6856,6 +7114,12 @@ package body PSC.Interpreter is
          --        next iteration of a concurrent initial/next/while loop.
          Add_To_Master (Thread_Master, Server_Index, New_Tcb);
 
+         if not Master_Extra.Master_Is_Shared then
+            --  Mark master shared if not already
+            Master_Extra.Master_Is_Shared := True;
+            Master_Extra.Innermost_Shared_Master := Index;
+         end if;
+
          --  Add to queue of waiting threads
          --  NOTE: We used to put these in FIFO order
          --       but now we use LIFO order, with the
@@ -6867,19 +7131,29 @@ package body PSC.Interpreter is
 
          Add_To_Shared_Deque (Server_Index, New_Tcb);
 
-         if Num_Shared_Threads_Needed > 0
-           and then Info.Unshared_Threads.Count > 0
-         then
-            --  More shared threads needed, and this server
-            --  has some unshared ones
-            Increase_Shared_Threads (Server_Index);
+         if Num_Shared_Threads_Needed > 1 then
+            --  We added one shared thread, but more are needed.
+            if Info.Unshared_Threads.Count > 0 then
+               --  More shared threads needed, and this server
+               --  has some unshared ones
+               Increase_Shared_Threads (Server_Index);
+            else
+               --  Recompute num shared threads needed
+               Num_Shared_Threads_Needed :=
+                 Thread_Count'Max (1, Thread_Count
+                   (Get_Thread'Count + Num_Servers_Waiting_For_Masters) -
+                     Num_Waiting_Shared_Threads);
+            end if;
+         else
+            --  We provided one new shared thread
+            Num_Shared_Threads_Needed := 0;
          end if;
 
          if Master_Extra.Subthread_Count > Max_Subthreads_Per_Master then
             Max_Subthreads_Per_Master := Master_Extra.Subthread_Count;
             if Debug_Threading then
                Put_Line
-                 ("Spawn_Thread -- new " &
+                 ("Spawn_Shared_Thread -- new " &
                   "Max_Subthreads_Per_Master =" &
                   Thread_Count'Image (Max_Subthreads_Per_Master));
             end if;
@@ -6887,16 +7161,16 @@ package body PSC.Interpreter is
 
          if Debug_Threading then
             Put_Line
-              ("Spawn_Thread for master with index" &
+              ("Spawn_Shared_Thread for master with index" &
                Master_Index'Image (Index));
 
             Dump_Masters;
             Thread_Manager.Dump_Locks;
             Thread_Manager.Dump_Thread_Tree (Label =>
-              "Thread tree after Spawn_Thread");
+              "Thread tree after Spawn_Shared_Thread");
          end if;
 
-      end Spawn_Thread;
+      end Spawn_Shared_Thread;
 
       -------------------------
       -- Pause_Other_Servers --
@@ -6957,7 +7231,9 @@ package body PSC.Interpreter is
          Solo_Server := 0;
 
          if not Is_Shut_Down then
-            Put_Line ("All servers have resumed.");
+            if Debug_Threading then
+               Put_Line ("All servers have resumed.");
+            end if;
          end if;
       end Resume_Other_Servers;
 
@@ -7120,6 +7396,10 @@ package body PSC.Interpreter is
          Put_Line ("Dump_Thread_State finished.");
          Flush;
       exception
+         when Storage_Error =>
+            --  Not much to do here
+            raise;
+
          when E : others =>
             Flush;
             Put_Line ("Exception raised in Dump_Thread_State: " &
@@ -7841,9 +8121,11 @@ package body PSC.Interpreter is
             end if;
 
             if Waiter /= null then
-               Put_Line
-                 ("Adjusting delay-queue entries for pause which took" &
-                  Duration'Image (Actual_Pause_Duration) & " seconds");
+               if Debug_Delay then
+                  Put_Line
+                    ("Adjusting delay-queue entries for pause which took" &
+                     Duration'Image (Actual_Pause_Duration) & " seconds");
+               end if;
             end if;
 
             while Waiter /= null loop
@@ -7946,6 +8228,18 @@ package body PSC.Interpreter is
                   (Large_Obj_Addr + Large_Obj_Next_Block_Offset);
       end Large_Obj_Next_Block;
 
+      ------------------------
+      -- Large_Obj_On_Stack --
+      ------------------------
+
+      function Large_Obj_On_Stack
+        (Addr : Object_Virtual_Address) return Boolean is
+      --  Return True if given non-null large obj is residing on stack
+      begin
+         return not Is_Special_Large_Value (Addr)
+           and then To_Large_Obj_Ptr (Addr).On_Stack;
+      end Large_Obj_On_Stack;
+
       --------------------
       -- Large_Obj_Size --
       --------------------
@@ -8038,7 +8332,8 @@ package body PSC.Interpreter is
          Size           : Offset_Within_Area;
          Stg_Rgn_Id     : Stg_Rgn_Index;
          Type_Id        : Type_Index;
-         Lock_Obj       : Lock_Obj_Index := 0)
+         Lock_Obj       : Lock_Obj_Index := 0;
+         On_Stack       : Boolean := False)
       is
          Header : Large_Obj_Header
                     renames To_Large_Obj_Ptr (Large_Obj_Addr).all;
@@ -8047,6 +8342,7 @@ package body PSC.Interpreter is
          Header.Size := Size;
          Header.Type_Info := Type_Id;
          Header.Lock_Obj := Lock_Obj;
+         Header.On_Stack := On_Stack;
       end Set_Large_Obj_Header;
 
       procedure Set_Large_Obj_Header
@@ -8054,7 +8350,8 @@ package body PSC.Interpreter is
          Size           : Offset_Within_Area;
          Stg_Rgn_Id     : Stg_Rgn_Index;
          Type_Id        : Type_Index;
-         Lock_Obj       : Lock_Obj_Index := 0)
+         Lock_Obj       : Lock_Obj_Index := 0;
+         On_Stack       : Boolean := False)
       is
          Header : Large_Obj_Header
                     renames To_Large_Obj_Ptr (Large_Obj_Addr).all;
@@ -8063,6 +8360,7 @@ package body PSC.Interpreter is
          Header.Size := Size;
          Header.Type_Info := Type_Id;
          Header.Lock_Obj := Lock_Obj;
+         Header.On_Stack := On_Stack;
       end Set_Large_Obj_Header;
 
       ----------------------------
@@ -8109,6 +8407,18 @@ package body PSC.Interpreter is
       begin
          Store_Word (Large_Obj_Addr + Large_Obj_Next_Block_Offset, Next_Block);
       end Set_Large_Obj_Next_Block;
+
+      ----------------------------
+      -- Set_Large_Obj_On_Stack --
+      ----------------------------
+
+      procedure Set_Large_Obj_On_Stack
+        (Large_Obj_Addr : Object_Virtual_Address;
+         On_Stack       : Boolean) is
+      --  Indicate whether given object resides on stack rather than in stg rgn
+      begin
+         To_Large_Obj_Ptr (Large_Obj_Addr).On_Stack := On_Stack;
+      end Set_Large_Obj_On_Stack;
 
       ------------------------
       -- Set_Large_Obj_Size --
@@ -8776,17 +9086,14 @@ package body PSC.Interpreter is
 
                   Put_Line
                     (" returning from locked call on " &
-                     Strings.To_String (Target_Routine.Name) & " at " &
-                     Hex_Image (Target_Routine.Routine_Addr) &
-                     ", imported routine #" &
-                     Routine_Index'Image (Target_Routine.Index) &
+                     Strings.To_String (Target_Routine.Name) &
                      ", TCB_Was_Queued = " &
                      Boolean'Image (Thread_Was_Queued));
-                  Put_Line
-                    (" (param area, 0) =" &
-                     Hex_Image
-                        (Fetch_Word (New_Context,
-                                       (Param_Area, 0, No_VM_Obj_Id))));
+                  Dump_Param_Decls (Target_Routine);
+                  Dump_Param_Values
+                    (Target_Routine,
+                     New_Context,
+                     On_Entering => False);
                end if;
             end if;
 
@@ -8971,8 +9278,8 @@ package body PSC.Interpreter is
       --  Local operations  --
 
       procedure Spawn_Unshared_Thread
-        (Thread_Master : Word_Ptr;
-         Server_Index  : Thread_Server_Index;
+        (Context       : in out Exec_Context;
+         Thread_Master : Word_Ptr;
          New_Tcb       : Word_Ptr;
          Spawning_Tcb  : Word_Ptr);
       --  Spawn thread which is not available for stealing
@@ -8983,17 +9290,25 @@ package body PSC.Interpreter is
       ---------------------------
 
       procedure Spawn_Unshared_Thread
-        (Thread_Master : Word_Ptr;
-         Server_Index  : Thread_Server_Index;
+        (Context       : in out Exec_Context;
+         Thread_Master : Word_Ptr;
          New_Tcb       : Word_Ptr;
          Spawning_Tcb  : Word_Ptr) is
-         --  Spawn thread which is not available for stealing,
-         --  on an unshared master.
+         --  Spawn thread which is not immediately available for stealing,
+         --  since there is no call for shared threads.
+
+         --  NOTE: We presume caller has made this check
+         --        (we don't want to repeat it since is an atomic object)
+         --  pragma Assert (Num_Shared_Threads_Needed = 0);
+
+         Server_Index : constant Thread_Server_Index := Context.Server_Index;
          Info         : Server_Info renames Server_Info_Array (Server_Index);
          Index        : constant Master_Index :=
            Index_Of_Master (Thread_Master);
          Master_Extra : Master_Extra_Rec renames Master_Extras (Index);
-      begin
+
+      begin  --  Spawn_Unshared_Thread
+
          if Debug_Threading then
             Put_Line
               ("Spawn_Unshared_Thread for Server" &
@@ -9005,11 +9320,45 @@ package body PSC.Interpreter is
          if not Exit_Was_Requested (Thread_Master, Spawning_Tcb) then
             --  Only spawn a new thread when the spawner isn't exiting
 
-            --  Add new Tcb to (unshared) master
-            Add_To_Master (Thread_Master, Server_Index, New_Tcb);
+            if Info.Unshared_Threads.Count >= Enough_Unshared_Threads
+              and then Tcb_For_Compiled_Routine (New_Tcb)
+              and then Tcb_Locked_Param_Index (New_Tcb) = 0
+              and then Info.Bypassed_Init_Recursion_Level <
+                Max_Bypassed_Init_Recursion
+            then
+               --  We can just run the code, rather than creating a thread
+               if Debug_Threading then
+                  Put_Line
+                    ("Can execute immediately instead of spawning on master" &
+                       Master_Index'Image (Index));
+               end if;
+
+               --  Avoid too many levels of recursion
+               Info.Bypassed_Init_Recursion_Level :=
+                 Info.Bypassed_Init_Recursion_Level + 1;
+
+               --  Execute code associated with TCB now
+               Execute_Compiled_Code_Immediately (Context, New_Tcb);
+
+               --  Restore recursion count
+               Info.Bypassed_Init_Recursion_Level :=
+                 Info.Bypassed_Init_Recursion_Level - 1;
+
+               return;  --  All done
+            end if;
+
+            if Master_Extra.Master_Is_Shared then
+               --  Add new Tcb to shared master
+               Thread_Manager.Add_To_Shared_Master
+                 (Thread_Master, Server_Index, New_Tcb);
+            else
+               --  Add new Tcb to (unshared) master
+               Add_To_Master (Thread_Master, Server_Index, New_Tcb);
+            end if;
 
             --  Add to unshared queue
-            Add_To_Deque (Info.Unshared_Threads, New_Tcb);
+            Add_To_Deque (Info.Unshared_Threads, New_Tcb,
+              Is_Shared => False);
 
             --  Accumulate statistics
             if Info.Unshared_Threads.Count >
@@ -9033,11 +9382,6 @@ package body PSC.Interpreter is
                     Thread_Server_Index'Image (Server_Index));
             end if;
 
-            if Thread_Manager_Data.Num_Shared_Threads_Needed > 0 then
-               --  We have a request for more shared threads,
-               --  and we now have one.
-               Thread_Manager.Increase_Shared_Threads (Server_Index);
-            end if;
          end if;
       end Spawn_Unshared_Thread;
 
@@ -9323,10 +9667,84 @@ package body PSC.Interpreter is
               Num_Stack_Frames => 1, Use_Cur_Err => True);
 
             --  Invoke the debugging console if available.
-            Invoke_Debug_Console (New_Context);
+            Invoke_Debug_Console (New_Context, Reason => Internal_Failure);
 
             raise;
       end Execute_For_Thread;
+
+      procedure Execute_Compiled_Code_Immediately
+        (Context : in out Exec_Context; New_Tcb : Word_Ptr) is
+      --  Execute compiled code specified in thread control block,
+      --  piggybacking on existing context rather than spawning a new thread.
+      --  No locking param allowed.
+
+         --  No locks allowed; code is compiled
+         pragma Assert (Tcb_Locked_Param_Index (New_Tcb) = 0);
+         pragma Assert (Tcb_For_Compiled_Routine (New_Tcb));
+
+         Old_Tcb     : constant Word_Ptr := Context.Control_Area;
+         Static_Link : constant Word_Ptr := Tcb_Static_Link (New_Tcb);
+         Params      : constant Word_Ptr :=
+                            Add (New_Tcb, Tcb_Param_List_Offset);
+      begin
+         Context.Control_Area := New_Tcb;
+         if Tcb_For_Nested_Block (New_Tcb) then
+            --  Compiled nested block returns exit outcome as a return value
+            declare
+               function Import_NBO is new Ada.Unchecked_Conversion
+                     (Nested_Block_Outcome_As_Int, Nested_Block_Outcome);
+               Nested_Block : constant Nested_Blk_Address :=
+                 To_Nested_Blk_Address (Tcb_Code_Addr (New_Tcb));
+               Block_Outcome : constant Nested_Block_Outcome :=
+                 Import_NBO (Nested_Block.all
+                    (Context, Params,
+                     To_Type_Desc_Or_Op_Map (Static_Link)));
+            begin
+               if Block_Outcome.Level <=
+                  Nested_Block_Return_Outcome_Level
+               then
+                  --  A "return"
+                  Set_Enclosing_Master_Outcome (Context,
+                    Outcome         => Return_From_Operation_Outcome);
+               elsif Block_Outcome.Level > 0
+                 or else Block_Outcome.Skip > 0
+               then
+                  --  A multi-level "exit", or a non-zero "skip" count
+                  Set_Enclosing_Master_Outcome (Context,
+                    Outcome         => Exit_Outcome,
+                    Exit_Level_Diff => Natural (Block_Outcome.Level + 1),
+                    Exit_Skip_Count => Block_Outcome.Skip);
+               end if;
+            end;
+         else
+            --  No result returned
+            Call_Compiled_Routine
+              (Context, Params,
+               To_Non_Op_Map_Type_Desc (Static_Link),
+               Tcb_Code_Addr (New_Tcb), Tcb_Conv_Desc (New_Tcb));
+         end if;
+
+         --  Restore Control_Area
+         Context.Control_Area := Old_Tcb;
+
+         if Debug_Statistics then
+            --  Statistics on number of bypassed thread inits
+            declare
+               Info : Server_Info renames
+                 Server_Info_Array (Context.Server_Index);
+            begin
+               Info.Num_Bypassed_Thread_Initiations :=
+                 Info.Num_Bypassed_Thread_Initiations + 1;
+            end;
+         end if;
+
+      exception
+         when others =>
+            --  Restore Control_Area and re-raise
+            Context.Control_Area := Old_Tcb;
+            raise;
+
+      end Execute_Compiled_Code_Immediately;
 
       function Exit_Was_Requested
         (Thread_Master : Word_Ptr;
@@ -9543,8 +9961,8 @@ package body PSC.Interpreter is
       ------------------
 
       procedure Spawn_Thread
-        (Thread_Master : Word_Ptr;
-         Server_Index  : Thread_Server_Index;
+        (Context       : in out Exec_Context;
+         Thread_Master : Word_Ptr;
          New_Tcb       : Word_Ptr;
          Spawning_Tcb  : Word_Ptr)
       is
@@ -9569,44 +9987,35 @@ package body PSC.Interpreter is
 
          if Master_Extra.Subthread_Count = Uninit_Thread_Count then
             --  This is the first thread for this master
-            if Spawning_Tcb /= null then
-               --  Make sure the enclosing master matches that of the spawner.
-               --  Then temporarily update the master of the spawner to be
-               --  this new master; we will reset it when the master is
-               --  awaited.
-               pragma Assert
-                 (Master_Extra.Enclosing_Master =
-                   Index_Of_Master (Tcb_Master_Ptr (Spawning_Tcb)));
+            pragma Assert (Master_Extra.Enclosing_Master <= Last_Master);
 
-               pragma Assert (Master_Extra.Enclosing_Master <= Last_Master);
+            --  Copy the Innermost_Shared_Master indicator from encloser
+            --  TBD: Why don't we do this in Initialize_Master?
+            Master_Extra.Innermost_Shared_Master :=
+              Master_Extras (Master_Extra.Enclosing_Master).
+                Innermost_Shared_Master;
 
-               --  Copy the Innermost_Shared_Master indicator from encloser
-               Master_Extra.Innermost_Shared_Master :=
-                 Master_Extras (Master_Extra.Enclosing_Master).
-                   Innermost_Shared_Master;
-
-               --  Set spawning-tcb to point to its innermost active submaster
-               Set_Tcb_Master_Ptr (Spawning_Tcb, Thread_Master);
-
-               if Debug_Threading then
-                  Put_Line (" Spawning first thread on master" &
-                    Master_Index'Image (Index) & ", enclosed by master" &
-                    Master_Index'Image (Master_Extra.Enclosing_Master));
-               end if;
-
+            if Debug_Threading then
+               Put_Line (" Spawning first thread on master" &
+                 Master_Index'Image (Index) & ", enclosed by master" &
+                 Master_Index'Image (Master_Extra.Enclosing_Master));
             end if;
 
          end if;
 
-         if not Master_Extra.Master_Is_Shared then
-            --  Master is unshared, no need for a protected operation
-            Spawn_Unshared_Thread (Thread_Master, Server_Index, New_Tcb,
+         if (not Master_Extra.Master_Is_Shared
+               or else
+             not Tcb_Uses_Queuing (New_Tcb))
+           and then Thread_Manager_Data.Num_Shared_Threads_Needed = 0
+         then
+            --  Create an unshared thread
+            Spawn_Unshared_Thread (Context, Thread_Master, New_Tcb,
               Spawning_Tcb => Spawning_Tcb);
          else
-            --  Pass the buck to the thread manager
-            Thread_Manager.Spawn_Thread
+            --  Pass the buck to the thread manager to create a shared thread
+            Thread_Manager.Spawn_Shared_Thread
               (Thread_Master,
-               Server_Index,
+               Context.Server_Index,
                New_Tcb,
                Spawning_Tcb => Spawning_Tcb);
          end if;
@@ -9625,7 +10034,7 @@ package body PSC.Interpreter is
                Put_Line
                  (" Exit requested for thread at " &
                     Hex_Image (Server_Info_Array
-                      (Server_Index).Last_Active_Thread));
+                      (Context.Server_Index).Last_Active_Thread));
             end if;
          end if;
 
@@ -9659,6 +10068,9 @@ package body PSC.Interpreter is
          Subthread_Count : constant Thread_Count :=
            Master_Extra.Subthread_Count;
       begin
+         --  Statistics
+         Num_Masters := Num_Masters + 1;
+
          if Subthread_Count = Uninit_Thread_Count then
             --  We are waiting on a master before any subthreads were spawned
             if Debug_Threading then
@@ -9669,7 +10081,7 @@ package body PSC.Interpreter is
             end if;
 
             --  Restore Tcb_Waiting's master if has been updated to point
-            --  to master being awaited (set in Spawn_Thread).
+            --  to master being awaited (set in Initialize_Master).
             if Tcb_Master_Ptr (Tcb_Waiting) = Thread_Master then
                Set_Tcb_Master_Ptr (Tcb_Waiting,
                  Master_Extras
@@ -9794,8 +10206,8 @@ package body PSC.Interpreter is
             end loop;
             --  Threads associated with given master now complete
 
-            --  Restore Tcb_Waiting's master, after verifying it
-            --  still points to master being awaited (set in Spawn_Thread).
+            --  Restore Tcb_Waiting's master, after verifying it still
+            --  points to master being awaited (set in Initialize_Master).
             pragma Assert (Tcb_Master_Ptr (Tcb_Waiting) = Thread_Master);
             Set_Tcb_Master_Ptr (Tcb_Waiting,
               Master_Extras
@@ -9804,6 +10216,11 @@ package body PSC.Interpreter is
             --  Indicate thread is running again
             Set_Tcb_State (Tcb_Waiting, Running);
 
+         end if;
+
+         --  Statistics
+         if Master_Extra.Master_Is_Shared then
+            Num_Shared_Masters := Num_Shared_Masters + 1;
          end if;
 
          --  Zero out the stored master index
@@ -9843,8 +10260,10 @@ package body PSC.Interpreter is
 
       procedure Add_To_Deque
         (Deque   : in out Thread_Deque_Head;
-         New_Tcb : Word_Ptr) is
-         --  Add Tcb to end of Deque
+         New_Tcb : Word_Ptr;
+         Is_Shared : Boolean) is
+         --  Add Tcb to end of deque;
+         --  Is_Shared indicates whether queue is shared
       begin
          Set_Prev_Waiting_Tcb
            (New_Tcb, Deque.Last_Thread);
@@ -9866,7 +10285,11 @@ package body PSC.Interpreter is
          Deque.Count       := Deque.Count + 1;
 
          --  Indicate thread is on server queue
-         Set_Tcb_State (New_Tcb, On_Server_Queue);
+         if Is_Shared then
+            Set_Tcb_State (New_Tcb, On_Server_Shared_Queue);
+         else
+            Set_Tcb_State (New_Tcb, On_Server_Unshared_Queue);
+         end if;
       end Add_To_Deque;
 
       --------------------
@@ -9896,7 +10319,8 @@ package body PSC.Interpreter is
               (Size      => 0,
                Stg_Rgn   => 0,
                Type_Info => 0,
-               Lock_Obj  => Current_Lock_Index);
+               Lock_Obj  => Current_Lock_Index,
+               On_Stack  => True);
             Tcb.Self_Address := Null_Virtual_Address;
          else
             --  TCB's Size should already be initialized,
@@ -10065,7 +10489,6 @@ package body PSC.Interpreter is
          if Tcb_Size (Finished_Tcb) > 0 then
             --  Size field > 0 in TCB means TCB was dynamically allocated.
             --  Release it back to the appropriate region.
-            --  TBD: Could this be moved out to unlocked Finish_Thread?
             Deallocate_From_Stg_Rgn
               (Stg_Rgn_Of_Large_Obj (Thread_Master),
                To_Tcb_Ptr (Finished_Tcb).Self_Address,
@@ -10089,6 +10512,10 @@ package body PSC.Interpreter is
             Flush;
          end if;
       exception
+         when Storage_Error =>
+            --  Not much to do here
+            raise;
+
          when E : others =>
             Messages.Put_RT_Error
               ("Finish_Subthread: " &
@@ -10637,7 +11064,8 @@ package body PSC.Interpreter is
            (Size => 0,
             Stg_Rgn => Local_Stg_Rgn_Index,
             Type_Info => 0,
-            Lock_Obj => 0);
+            Lock_Obj => 0,
+            On_Stack => True);
 
          --  Assign the thread master an index
          if Info.Free_Master /= 0 then
@@ -10677,6 +11105,9 @@ package body PSC.Interpreter is
             --  Indicate whether can be shared
             Master_Extra.Master_Never_Shared := Never_Shared;
 
+            --  Save state of server at point when master is created
+            Master_Extra.State_Of_Master := Info.Current_State;
+
             --  Initialize enclosing master
             if Spawning_Tcb /= null then
                Master_Extra.Enclosing_Master :=
@@ -10690,6 +11121,11 @@ package body PSC.Interpreter is
                     Master_Extras
                       (Master_Extra.Enclosing_Master).Master_Never_Shared;
                end if;
+
+               --  Temporarily update the master of the spawner to be
+               --  this new master; we will reset it when the master is
+               --  awaited.
+               Set_Tcb_Master_Ptr (Spawning_Tcb, Master_Address);
             end if;
 
             if Debug_Threading then
@@ -10739,6 +11175,8 @@ package body PSC.Interpreter is
 
          Master_Extra : Master_Extra_Rec renames Master_Extras (Index);
          Info         : Server_Info renames Server_Info_Array (Server_Index);
+         Reuse_Count  : constant Master_Reuse_Counter :=
+           Master_Extra.Reuse_Count;
       begin
          if Debug_Threading then
             Put_Line (" Release_Master" & Master_Index'Image (Index) & " at " &
@@ -10758,7 +11196,12 @@ package body PSC.Interpreter is
             Master_Never_Shared     => False,
             Owned_By_Server         => 0,
             Innermost_Shared_Master => 0,
-            Exiting_Tcb             => null);
+            Reuse_Count             => 0,
+            Exiting_Tcb             => null,
+            State_Of_Master         => Null_Server_State);
+
+         --  Now bump the reuse count (might wrap around).
+         Master_Extra.Reuse_Count := Reuse_Count + 1;
 
          --  Link onto the chain of free master indices,
          --  linked through the "enclosing-master" field.
@@ -11298,7 +11741,6 @@ package body PSC.Interpreter is
       --  If Type_Base is Enclosing Type_Areas,
       --    follow the enclosing type the specified number of times
       --  else do nothing and return Type_Desc
-         Type_Desc_To_Use : Type_Descriptor_Ptr := Type_Desc;
       begin
          if Type_Base not in Enclosing_Type_Areas then
             return Type_Desc;
@@ -12532,7 +12974,9 @@ package body PSC.Interpreter is
                --  Virtual is physical address, not as easy a problem
                if Value mod Word_SU_Size /= 0
                  or else
-                  Value not in Lowest_Virt_Addr .. Highest_Virt_Addr
+                  (Value not in Lowest_Virt_Addr .. Highest_Virt_Addr
+                     and then
+                   Value not in Lowest_Stack_Addr .. Highest_Stack_Addr)
                then
                   --  Presume is small
                   Presuming_Is_Small := True;
@@ -12573,8 +13017,9 @@ package body PSC.Interpreter is
             return;
 
          elsif not Is_Special_Large_Value (Value)
+           and then not Virt_Is_Phys
            and then Value / Chunk_Divisor not in
-              1 .. Word_Type (Stg_Rgn_Manager.Num_Stg_Rgn_Chunks)
+                       1 .. Word_Type (Stg_Rgn_Manager.Num_Stg_Rgn_Chunks)
          then
             Put_Line
               (Indent_Str & Hex_Image (Value) &
@@ -12597,6 +13042,10 @@ package body PSC.Interpreter is
                & " (large -- region" &
                Stg_Rgn_Index'Image (Large_Obj_Stg_Rgn_Index (Value)) &
                ")");
+            Put_Line
+              (Indent_Str & " string value = """ &
+               Univ_Strings.To_String (Univ_Strings.From_Word_Type (Value)) &
+               '"');
          else
             --  Dump each component
             declare
@@ -13046,7 +13495,7 @@ package body PSC.Interpreter is
                        (Strings.To_U_String (Instr.Assertion_Str)) &
                      Type_Name_Image (Instr.Static_Link, ", type => "),
                      Src_Pos => Instr.Source_Pos,
-                     Message_Kind => "Assertion failed");
+                     Message_Kind => "Error: Assertion failed");
                when Wait_For_Parallel_Op =>
                   Messages.Put_RT_Error
                     ("waiting for subthread to complete",
@@ -15599,8 +16048,12 @@ package body PSC.Interpreter is
      (Type_Desc    : Non_Op_Map_Type_Ptr;
       Stg_Rgn      : Stg_Rgn_Ptr;
       Server_Index : Thread_Server_Index) return Word_Type
+   --  Create large (non-array) object in given region.
+   --  Initialize all subobjects to appropriate kind of null
    is
       pragma Assert (not Is_Small (Type_Desc));
+      pragma Assert (Type_Desc.Type_Kind /= Basic_Array_Kind);
+
       New_Obj_Size : constant Offset_Within_Area :=
                        Offset_Within_Area (Type_Desc.Num_Components) +
                        Large_Obj_Header_Size;
@@ -15864,6 +16317,10 @@ package body PSC.Interpreter is
    begin
       Dump_Obj_With_Indent (Value, Type_Desc, Indent => 0);
    exception
+      when Storage_Error =>
+         --  Not much to do here
+         raise;
+
       when E : others =>
          Put_Line (" dump_obj raised " & Ada.Exceptions.Exception_Name (E));
    end Dump_Obj_With_Type;
@@ -16050,6 +16507,7 @@ package body PSC.Interpreter is
       Start_Pc          : Code_Index;
       Context           : in out Exec_Context;
       Thread_Was_Queued : out Boolean;
+      Debugger_Console  : Boolean := False;
       Server_Index      : Thread_Server_Index := Main_Thread_Server_Index)
    is
       --  This executes the instructions
@@ -16066,12 +16524,15 @@ package body PSC.Interpreter is
       --  If Thread_Was_Queued is True upon return, then thread did *not*
       --  complete, but instead was queued waiting for a dequeue
       --  condition to be true.
+      --  If Debugger_Console is true, then we immediately invoke the
+      --  debugger console rather than executing instructions.
       --  Context.Server_Index is set to zero if user requests shutdown.
 
       Pc : Code_Index := Start_Pc;
       Info : Server_Info renames Server_Info_Array (Server_Index);
       Cur_State : Server_State renames Info.Current_State;
-      Last_State : Server_State renames Info.Last_State;
+      Last_Src_Pos : Source_Positions.Source_Position
+        renames Info.Last_Src_Pos;
       Static_Link : constant Word_Ptr :=
         Fetch_Word_Ptr (Context.Local_Area, Local_Area_Static_Link_Offset);
          --  TBD: Static_Link should be passed as a separate parameter
@@ -16199,8 +16660,12 @@ package body PSC.Interpreter is
                Messages.Put_RT_Error
                  (Strings.To_String
                      (Strings.To_U_String (Instr.Assertion_Str)),
-                  Src_Pos => Last_State.Src_Pos,
-                  Message_Kind => "Assertion failed");
+                  Src_Pos => Last_Src_Pos,
+                  Message_Kind => "Error: Assertion failed");
+                  --  NOTE: We use Last_Src_Pos here because
+                  --        it provides a more precise
+                  --        source-position of the part of
+                  --        the assertion expression that failed.
 
                --  TBD: Should we continue or raise an exception?
                --      For now we will dump the stack and keep going
@@ -16208,7 +16673,7 @@ package body PSC.Interpreter is
                  (Cur_State, Skip_First => True, Use_Cur_Err => True);
 
                --  Invoke the debugging console if available.
-               Invoke_Debug_Console (Context);
+               Invoke_Debug_Console (Context, Reason => Assertion_Failure);
 
             end if;
          end if;
@@ -16411,20 +16876,27 @@ package body PSC.Interpreter is
          return Exc_Info;
       end Rest_Of_Exc_Info;
 
-      Old_State : aliased constant Server_State := Cur_State;
+      Prev_State : aliased Server_State := Cur_State;
 
       procedure Set_Cur_State;
       pragma Inline (Set_Cur_State);
-         --  Set up Cur_State and link to Old_State.
+         --  Set up Cur_State and link to Prev_State.
 
       procedure Set_Cur_State is
       begin
          --  Remember state (for debugging)
-         Cur_State.Prev_State := Old_State'Unchecked_Access;
+         Cur_State.Prev_State := Prev_State'Unchecked_Access;
          Cur_State.Code := Instructions;
          Cur_State.Context := Context'Unchecked_Access;
          Cur_State.Pc := Start_Pc;
          Cur_State.Start_Pc := Start_Pc;
+
+         --  Reset the debugger flags, as appropriate
+         Cur_State.Stopped_At_Line := 0;
+         if Cur_State.Step_Indicator = Single_Step_Over then
+            --  We want to step over this call, so clear the flag.
+            Cur_State.Step_Indicator := Continue_Execution;
+         end if;
 
          if Context.Control_Area /= null then
             Cur_State.Locked_Param_Index :=
@@ -16524,7 +16996,7 @@ package body PSC.Interpreter is
                     Exit_Skip_Count => Block_Outcome.Skip);
                elsif Tcb_Exit_Requested (Context.Control_Area) then
                   --  Nothing more to do, except to restore state
-                  Cur_State := Old_State;
+                  Cur_State := Prev_State;
                   return;   --- All done ---
                else
                   --  Nothing special to do
@@ -16549,7 +17021,7 @@ package body PSC.Interpreter is
          end if;
 
          --  Restore state
-         Cur_State := Old_State;
+         Cur_State := Prev_State;
          return;   --- All done ---
       end if;
 
@@ -16559,12 +17031,12 @@ package body PSC.Interpreter is
          if Debug_Calls then
             Messages.Put_Message ("Null routine found for call on " &
                 Strings.To_String (Instructions.Name),
-              Src_Pos => Old_State.Src_Pos,
+              Src_Pos => Prev_State.Src_Pos,
               Message_Kind => "Info");
          end if;
 
          --  Restore state
-         Cur_State := Old_State;
+         Cur_State := Prev_State;
          return;
       end if;
 
@@ -16575,6 +17047,13 @@ package body PSC.Interpreter is
       --      or other op that creates a nested local area.
       Store_Word_Ptr (Context.Local_Area, Local_Area_Param_Ptr_Offset,
          Context.Params);
+
+      if Debugger_Console then
+         --  User has requested we enter the debug console
+         --  before doing anything else.
+         Invoke_Debug_Console (Context,
+           Reason => No_Reason);
+      end if;
 
       loop
          --  Execute the instruction at given PC
@@ -16588,6 +17067,66 @@ package body PSC.Interpreter is
             Cur_State.Pc := Pc;
             if Instr.Source_Pos.Line /= 0 then
                Cur_State.Src_Pos := Instr.Source_Pos;
+               if Cur_State.Step_Indicator /= Continue_Execution then
+                  --  See if we should stop now
+                  case Cur_State.Step_Indicator is
+                     when Single_Step_Into =>
+                        if Cur_State.Src_Pos.Line /=
+                          Cur_State.Stopped_At_Line
+                        then
+                           --  Stop as soon as the line does not match
+                           if Pc = 1
+                             and then
+                              Prev_State.Step_Indicator = Single_Step_Into
+                           then
+                              --  But first clear the indicator in the
+                              --  enclosing frame
+                              Prev_State.Step_Indicator := Continue_Execution;
+                              Prev_State.Stopped_At_Line := 0;
+                           end if;
+
+                           Invoke_Debug_Console (Context,
+                             Reason => Step_Into_Finished);
+                        end if;
+
+                     when Single_Step_Over =>
+                        if Cur_State.Src_Pos.Line /=
+                          Cur_State.Stopped_At_Line
+                        then
+                           --  Stop as soon as the line does not match
+                           Invoke_Debug_Console (Context,
+                             Reason => Step_Over_Finished);
+                        end if;
+
+                     when Step_Out =>
+                        --  Reached the frame where we should stop
+                        Invoke_Debug_Console
+                          (Context, Reason => Step_Out_Finished);
+
+                     when Stop_Execution
+                        | Continue_Execution =>
+                        --  These shouldn't occur
+                        pragma Assert (False);
+                        null;
+                  end case;
+               end if;
+            elsif Instr.Source_Pos.End_Line /= 0 then
+               --  A zero Line with a non-zero End_Line is a special
+               --  combination meaning "enter the debugger"
+               --  (i.e. is a breakpoint).
+               --  End_Col contains the breakpoint index.
+               Cur_State.Src_Pos := Instr.Source_Pos;
+               --  Copy the line form the end-line
+               Cur_State.Src_Pos.Line := Instr.Source_Pos.End_Line;
+
+               --  Check to see if we have already stopped at current line
+               if Cur_State.Stopped_At_Line /= Cur_State.Src_Pos.Line then
+                  --  We were not just stopped at this line, so enter the
+                  --  debugger console (presuming it is loaded).
+                  --  End_Col contains the breakpoint index
+                  Invoke_Debug_Console (Context,
+                    Reason => Debugger_Reason (Cur_State.Src_Pos.End_Col));
+               end if;
             end if;
 
             Pc := Pc + 1;
@@ -17087,14 +17626,47 @@ package body PSC.Interpreter is
          end;
       end if;
 
-      --  Save state just prior to return
-      Last_State := Cur_State;
+      --  Save source position just prior to return.
+      --  NOTE: This should preserve a more precise source position in case
+      --        some part of an assertion expression and-then chain fails.
+      Last_Src_Pos := Cur_State.Src_Pos;
 
-      --  Restore state
-      Cur_State := Old_State;
+      if Cur_State.Step_Indicator /= Continue_Execution then
+         --  We are in the middle of a single step.
+         --  Stop immediately after restoring the state.
+         declare
+            Prior_Step_Indicator : constant Single_Step_Indicator :=
+              Cur_State.Step_Indicator;
+         begin
+            --  Restore the state now
+            Cur_State := Prev_State;
+
+            case Prior_Step_Indicator is
+               when Single_Step_Into =>
+                  --  Stop upon exiting a frame
+                  Invoke_Debug_Console (Context,
+                    Reason => Step_Into_Exited_Frame);
+
+               when Single_Step_Over =>
+                  --  Stop upon exiting a frame
+                  Invoke_Debug_Console (Context,
+                    Reason => Step_Over_Exited_Frame);
+
+               when Step_Out
+                  | Stop_Execution
+                  | Continue_Execution =>
+                  --  These shouldn't occur
+                  pragma Assert (False);
+                  null;
+            end case;
+         end;
+      else
+         --  Restore state
+         Cur_State := Prev_State;
+      end if;
 
       if Is_Shut_Down
-        and then Old_State.Context = null
+        and then Prev_State.Context = null
         and then Server_Index = Main_Thread_Server_Index
       then
          --  Indicate that the user terminated the interpreter.
@@ -17103,6 +17675,10 @@ package body PSC.Interpreter is
       end if;
 
    exception
+      when Storage_Error =>
+         --  Not much to do here
+         raise;
+
       when Propagating_Exception =>
          Messages.Put_RT_Error
            ("Propagating exception",
@@ -17115,10 +17691,10 @@ package body PSC.Interpreter is
          Dump_Stack (Cur_State, Num_Stack_Frames => 1, Use_Cur_Err => True);
 
          --  Invoke the debugging console if available.
-         Invoke_Debug_Console (Context);
+         Invoke_Debug_Console (Context, Reason => Internal_Failure);
 
          --  Restore state
-         Cur_State := Old_State;
+         Cur_State := Prev_State;
          raise;
       when E : others =>
          Messages.Put_RT_Error
@@ -17136,10 +17712,10 @@ package body PSC.Interpreter is
          Dump_Stack (Cur_State, Num_Stack_Frames => 1, Use_Cur_Err => True);
 
          --  Invoke the debugging console if available.
-         Invoke_Debug_Console (Context);
+         Invoke_Debug_Console (Context, Reason => Internal_Failure);
 
          --  Restore state
-         Cur_State := Old_State;
+         Cur_State := Prev_State;
          raise Propagating_Exception;
    end Execute;
 
@@ -18022,6 +18598,80 @@ package body PSC.Interpreter is
          VM_Obj_Id => Extract_VM_Obj_Id
                         (Locator_Base, Locator_Offset, Locator_VM_Info));
    end Extract_Object_Locator;
+
+   --------------------
+   -- Init_Large_Obj --
+   --------------------
+
+   procedure Init_Large_Obj
+     (Type_Desc    : Non_Op_Map_Type_Ptr;
+      Stg_Rgn      : Stg_Rgn_Ptr;
+      New_Obj      : Word_Type)
+   --  Initialize large (non-array) object in given region.
+   --  Initialize all subobjects to appropriate kind of null
+   is
+      pragma Assert (not Is_Small (Type_Desc));
+      pragma Assert (Type_Desc.Type_Kind /= Basic_Array_Kind);
+
+      New_Obj_Size : constant Offset_Within_Area :=
+                       Offset_Within_Area (Type_Desc.Num_Components) +
+                       Large_Obj_Header_Size;
+   begin
+      --  Wrapper types should never show up on an actual object
+      pragma Assert (not Type_Desc.Is_Wrapper);
+
+      --  Fill in header
+      Set_Large_Obj_Header
+        (New_Obj,
+         New_Obj_Size,
+         Stg_Rgn.Index,
+         Type_Desc.Index,
+         On_Stack => True);
+
+      --  Initialize components to null
+      for I in 1 .. Type_Desc.Num_Components loop
+         declare
+            Comp_Type : constant Type_Descriptor_Ptr :=
+              Type_Desc.Components (I).Type_Desc;
+         begin
+            --  Assign an appropriate null into component
+            Store_Word
+              (New_Obj + Large_Obj_Header_Size + Offset_Within_Area (I - 1),
+               Null_For_Type_Or_Stg_Rgn
+                 (Comp_Type,
+                  Stg_Rgn,
+                  Is_By_Ref => Type_Desc.Components (I).Is_By_Ref));
+         end;
+      end loop;
+
+      if New_Obj < Lowest_Stack_Addr then
+         --  NOTE: Race condition
+         Lowest_Stack_Addr := New_Obj;
+      end if;
+
+      if New_Obj > Highest_Stack_Addr then
+         --  NOTE: Race condition
+         Highest_Stack_Addr := New_Obj;
+      end if;
+
+      Check_Is_Large (New_Obj);
+      pragma Assert (Large_Obj_Lock_Obj (New_Obj) = 0);
+   end Init_Large_Obj;
+
+   -----------------------------
+   -- Init_Large_Obj_Exported --
+   -----------------------------
+
+   procedure Init_Large_Obj_Exported
+     (Context      : Exec_Context;
+      Type_Info    : Type_Descriptor_Ptr;
+      New_Obj      : Word_Type) is
+   --  Init new large object in current region.
+      Type_Desc  : Non_Op_Map_Type_Ptr := Skip_Over_Op_Map (Type_Info);
+      pragma Assert (not Is_Small (Type_Desc));
+   begin
+      Init_Large_Obj (Type_Desc, Local_Stg_Rgn (Context), New_Obj);
+   end Init_Large_Obj_Exported;
 
    ----------------------
    -- Insert_VM_Obj_Id --
@@ -18980,24 +19630,92 @@ package body PSC.Interpreter is
    -- Invoke_Debug_Console --
    --------------------------
 
-   procedure Invoke_Debug_Console (Context : in out Exec_Context) is
+   procedure Invoke_Debug_Console (Context : in out Exec_Context;
+                                   Reason : Debugger_Reason) is
    --  Invoke the debugging console.
    --  Pause other servers while the console is executing.
+      Params : Word_Array (1 .. 2) := (0, Word_Type (Reason));
+      Result : Single_Step_Indicator;
+
+      Info : Server_Info renames Server_Info_Array (Context.Server_Index);
+      Cur_State : Server_State renames Info.Current_State;
+      use Source_Positions;
    begin
+      Cur_State.Step_Indicator := Continue_Execution;
+      Cur_State.Stopped_At_Line := 0;
+
       if Debug_Console_Routine /= null then
          --  Pause the other servers
          Thread_Manager.Pause_Other_Servers (Context.Server_Index);
          if Is_Shut_Down then
+            --  Try to be sure we don't get "stuck"
+            Pause_Nesting := 0;
+            Solo_Server := 0;
             return;
+         end if;
+
+         if Reason in Breakpoint_Encountered then
+            --  Double check that the breakpoint is still set
+            if Cur_State.Code.Code.Instrs (Cur_State.Pc).Source_Pos.Line /= 0
+            then
+               --  Breakpoint has been cleared while we were waiting
+               --  for the other servers to pause.
+               --  Resume the other servers and return immediately.
+               Thread_Manager.Resume_Other_Servers (Context.Server_Index);
+               return;
+            end if;
          end if;
 
          --  Invoke the debugging console
          Execute_Call_Op (Context,
-            Params => null,
+            Params => Params (Params'First)'Unchecked_Access,
             Static_Link => null,
             Target_Routine => Debug_Console_Routine,
             Locked_Param_Info => Null_Locked_Param_Info,
             Polymorphic_Output_Type => null);
+
+         Result := Single_Step_Indicator (Params (Params'First));
+
+         --  Don't reenter the debugger until the line changes
+         Cur_State.Stopped_At_Line := Cur_State.Src_Pos.Line;
+
+         case Result is
+            when Stop_Execution =>
+               --  Exit the program
+               Shut_Down_Thread_Servers (Total_Errors => 0);
+
+            when Single_Step_Into =>
+               --  Return to the debugger as soon as leaving the current line
+               --  including by calling another routine or returning.
+               Cur_State.Step_Indicator := Result;
+
+            when Single_Step_Over =>
+               --  Return to the debugger as soon as leaving the current line,
+               --  but "step over" any calls.
+               Cur_State.Step_Indicator := Result;
+
+            when Continue_Execution =>
+               --  Continue until hitting a breakpoint or an assertion failure.
+               --  We need to suppress the current breakpoint, if any,
+               --  until we get past it.
+               null;
+
+            when Step_Out =>
+               --  Continue until exiting the given number of stack frames.
+               declare
+                  Where_To_Stop : Server_State_Ptr := Cur_State.Prev_State;
+               begin
+                  --  Find where to set the Step_Indicator.
+                  for I in 2 .. Result loop
+                     if Where_To_Stop /= null then
+                        Where_To_Stop := Where_To_Stop.Prev_State;
+                     end if;
+                  end loop;
+                  if Where_To_Stop /= null then
+                     Where_To_Stop.Step_Indicator := Result;
+                  end if;
+               end;
+         end case;
 
          --  Resume the other servers
          Thread_Manager.Resume_Other_Servers (Context.Server_Index);
@@ -19237,6 +19955,15 @@ package body PSC.Interpreter is
          return Result;
       end;
    end Known_Type_Desc;
+
+   ------------------------
+   -- Large_Obj_On_Stack --
+   ------------------------
+
+   function Large_Obj_On_Stack
+     (Addr : Object_Virtual_Address) return Boolean
+   --  Return True if given non-null large obj is residing on stack
+     renames Large_Obj_Header_Ops.Large_Obj_On_Stack;
 
    --------------------
    -- Large_Obj_Size --
@@ -19486,11 +20213,11 @@ package body PSC.Interpreter is
       Info : Server_Info renames Server_Info_Array (Context.Server_Index);
       Cur_State : Server_State renames Info.Current_State;
       Result : Word_Type := 0;
-      This_State : Server_State_Ptr := Cur_State.Prev_State;
+      Caller_State : Server_State_Ptr := Caller_Of (Cur_State);
    begin
-      while This_State /= null loop
+      while Caller_State /= null loop
          Result := Result + Word_Type'(1);
-         This_State := This_State.Prev_State;
+         Caller_State := Caller_Of (Caller_State.all);
       end loop;
       Store_Word (Params, 0, Result);
    end Num_Stack_Frames;
@@ -19507,16 +20234,19 @@ package body PSC.Interpreter is
       Frame_Num : Natural := Natural (Fetch_Word (Params, 1));
 
       Info : Server_Info renames Server_Info_Array (Context.Server_Index);
-      This_State : Server_State_Ptr := Info.Current_State.Prev_State;
-      Prior_State : Server_State_Ptr := Info.Current_State'Access;
+      This_State : Server_State_Ptr := Info.Current_State'Access;
+      Caller_State : Server_State_Ptr := Caller_Of (Info.Current_State);
 
       Target : constant Word_Type := Fetch_Word (Params, 0);
       Target_Stg_Rgn : constant Stg_Rgn_Ptr := Stg_Rgn_Of_Large_Obj (Target);
+
+      Thread_Id : Word_Type := 0;  --  Identifies current thread
+      Master_Id : Word_Type := 0;  --  Identifies master of current thread
    begin
       for I in 2 .. Frame_Num loop
-         exit when This_State = null;
-         Prior_State := This_State;
-         This_State := This_State.Prev_State;
+         exit when Caller_State = null;
+         This_State := Caller_State;
+         Caller_State := Caller_Of (Caller_State.all);
       end loop;
 
       declare
@@ -19528,17 +20258,17 @@ package body PSC.Interpreter is
                       Server_Index => Context.Server_Index);
       begin
          --  Fill in the "Code : optional Routine"
-         if Prior_State.Code = null then
+         if This_State.Code = null then
             Store_Word (Result + Large_Obj_Header_Size, Null_Value);
          else
             Store_Word_Ptr
               (Word_To_Word_Ptr (Result),
                Large_Obj_Header_Size,
-               To_Word_Ptr (Prior_State.Code.all'Address));
+               To_Word_Ptr (This_State.Code.all'Address));
          end if;
 
          --  Fill in the "Enclosing_Type : optional Type_Descriptor"
-         if Prior_State.Context.Enclosing_Type = null then
+         if This_State.Context.Enclosing_Type = null then
             Store_Word
              (Result + Large_Obj_Header_Size + Offset_Within_Chunk'(1),
               Null_Value);
@@ -19547,35 +20277,75 @@ package body PSC.Interpreter is
               (Word_To_Word_Ptr (Result),
                Large_Obj_Header_Size + Offset_Within_Chunk'(1),
                To_Word_Ptr
-                 (Prior_State.Context.Enclosing_Type.all'Address));
+                 (This_State.Context.Enclosing_Type.all'Address));
          end if;
 
          --  Fill in the "Params : optional Univ_Integer"
          Store_Word_Ptr
            (Word_To_Word_Ptr (Result),
             Large_Obj_Header_Size + Offset_Within_Chunk'(2),
-            Prior_State.Context.Params);
+            This_State.Context.Params);
 
          --  Fill in the "Local_Area : optional Univ_Integer"
          Store_Word_Ptr
            (Word_To_Word_Ptr (Result),
             Large_Obj_Header_Size + Offset_Within_Chunk'(3),
-            Prior_State.Context.Local_Area);
+            This_State.Context.Local_Area);
 
          --  Fill in the "Pc : optional Instruction::Code_Offset"
          Store_Word (Result + Large_Obj_Header_Size + Offset_Within_Chunk'(4),
-                     Word_Type (Prior_State.Pc));
+                     Word_Type (This_State.Pc));
 
          --  Fill in the "Start_Pc : optional Instruction::Code_Offset"
          Store_Word (Result + Large_Obj_Header_Size + Offset_Within_Chunk'(5),
-                     Word_Type (Prior_State.Start_Pc));
+                     Word_Type (This_State.Start_Pc));
 
          --  Fill in the "Src_Pos : optional Source_Position"
+         declare
+            use Source_Positions;
+            Line : Line_Number := This_State.Src_Pos.Line;
+         begin
+            if Line = 0 and then This_State.Src_Pos.End_Line > 0 then
+               --  Fix up the line number since we seem to have a breakpoint
+               Line := This_State.Src_Pos.End_Line;
+            end if;
+
+            Store_Word
+              (Result + Large_Obj_Header_Size + Offset_Within_Chunk'(6),
+               Word_Type (This_State.Src_Pos.File) * 2**32 +
+               Word_Type (Line) * 2**10 +
+               Word_Type (This_State.Src_Pos.Col));
+         end;
+
+         --  Fill in Master_Id and Thread_Id
+         Thread_Id := Word_Ptr_To_Word (This_State.Context.Control_Area);
+         if Thread_Id /= 0 then
+            declare
+               Master : constant Word_Ptr :=
+                 Tcb_Master_Ptr (This_State.Context.Control_Area);
+            begin
+               if Master /= null then
+                  declare
+                     Index : constant Master_Index := Index_Of_Master (Master);
+                     Master_Extra : Master_Extra_Rec renames
+                       Master_Extras (Index);
+                  begin
+                     Master_Id := Word_Type (Index) * 2**16 +
+                       Word_Type (Master_Extra.Reuse_Count);
+                  end;
+               end if;
+            end;
+         end if;
+
+         --  Fill in the "Master_Id : Univ_Integer"
          Store_Word
-           (Result + Large_Obj_Header_Size + Offset_Within_Chunk'(6),
-            Word_Type (Prior_State.Src_Pos.File) * 2**32 +
-            Word_Type (Prior_State.Src_Pos.Line) * 2**10 +
-            Word_Type (Prior_State.Src_Pos.Col));
+           (Result + Large_Obj_Header_Size + Offset_Within_Chunk'(7),
+            Master_Id);
+
+         --  Fill in the "Thread_Id : Univ_Integer"
+         Store_Word
+           (Result + Large_Obj_Header_Size + Offset_Within_Chunk'(8),
+            Thread_Id);
 
          --  Return the result
          Store_Word (Params, 0, Result);
@@ -19598,8 +20368,8 @@ package body PSC.Interpreter is
          Extract_Object_Locator (Fetch_Word (Params, 2));
 
       Info : Server_Info renames Server_Info_Array (Context.Server_Index);
-      This_State : Server_State_Ptr := Info.Current_State.Prev_State;
-      Prior_State : Server_State_Ptr := Info.Current_State'Access;
+      This_State : Server_State_Ptr := Info.Current_State'Access;
+      Caller_State : Server_State_Ptr := Caller_Of (Info.Current_State);
 
       Result : Non_Op_Map_Type_Ptr;
    begin
@@ -19617,13 +20387,13 @@ package body PSC.Interpreter is
 
       --  Find the Nth frame, to get the right context
       for I in 2 .. Frame_Num loop
-         exit when This_State = null;
-         Prior_State := This_State;
-         This_State := This_State.Prev_State;
+         exit when Caller_State = null;
+         This_State := Caller_State;
+         Caller_State := Caller_Of (Caller_State.all);
       end loop;
 
       --  Get the "real" type descriptor using the context
-      Result := Get_Type_Desc (Prior_State.Context.all, Type_Locator);
+      Result := Get_Type_Desc (This_State.Context.all, Type_Locator);
       Store_Word_Ptr (Params, 0, To_Word_Ptr (Result.all'Address));
    end Nth_Frame_Type_At_Locator;
 
@@ -20386,10 +21156,8 @@ package body PSC.Interpreter is
 
    procedure Set_Large_Obj_Type_Info
      (Large_Obj_Addr : Object_Virtual_Address;
-      Type_Id        : Type_Index) is
-   begin
-      Large_Obj_Header_Ops.Set_Large_Obj_Type_Info (Large_Obj_Addr, Type_Id);
-   end Set_Large_Obj_Type_Info;
+      Type_Id        : Type_Index)
+     renames Large_Obj_Header_Ops.Set_Large_Obj_Type_Info;
 
    ----------------------------
    -- Set_Large_Obj_Lock_Obj --
@@ -20397,10 +21165,8 @@ package body PSC.Interpreter is
 
    procedure Set_Large_Obj_Lock_Obj
      (Large_Obj_Addr : Object_Virtual_Address;
-      Lock_Obj       : Lock_Obj_Index) is
-   begin
-      Large_Obj_Header_Ops.Set_Large_Obj_Lock_Obj (Large_Obj_Addr, Lock_Obj);
-   end Set_Large_Obj_Lock_Obj;
+      Lock_Obj       : Lock_Obj_Index)
+     renames Large_Obj_Header_Ops.Set_Large_Obj_Lock_Obj;
 
    -------------------------
    -- Set_Run_Time_Checks --
@@ -20482,6 +21248,7 @@ package body PSC.Interpreter is
                          (1, Total_Allocs_By_Owner + Total_Allocs_By_Nonowner);
 
       Total_Unshared_Thread_Initiations    : Longest_Natural := 0;
+      Total_Bypassed_Thread_Initiations    : Longest_Natural := 0;
       Overall_Max_Waiting_Unshared_Threads : Thread_Count_Base := 0;
       Overall_Summed_Unshared_Waiting      : Longest_Natural := 0;
    begin
@@ -20493,6 +21260,10 @@ package body PSC.Interpreter is
             Total_Unshared_Thread_Initiations :=
               Total_Unshared_Thread_Initiations +
                 Longest_Natural (Info.Num_Unshared_Thread_Initiations);
+
+            Total_Bypassed_Thread_Initiations :=
+              Total_Bypassed_Thread_Initiations +
+                Longest_Natural (Info.Num_Bypassed_Thread_Initiations);
 
             if Info.Max_Waiting_Unshared_Threads >
               Overall_Max_Waiting_Unshared_Threads
@@ -20603,6 +21374,12 @@ package body PSC.Interpreter is
       Put_Line
         (" Max_Waiting_For_Subthreads :" &
          Natural'Image (Max_Waiting_For_Subthreads));
+      Put_Line (" Max_Servers_Waiting_For_Masters:" &
+        Natural'Image (Max_Servers_Waiting_For_Masters));
+      Put_Line
+        (" Num_Masters :" &
+         Natural'Image (Num_Masters) & " (Shared :" &
+         Natural'Image (Num_Shared_Masters) & ")");
       Put_Line
         (" Num_Thread_Steals :" &
          Natural'Image (Num_Thread_Steals) & " out of" &
@@ -20613,6 +21390,14 @@ package body PSC.Interpreter is
            (Total_Unshared_Thread_Initiations +
              Longest_Natural (Num_Shared_Thread_Initiations)))
          & "%");
+      Put_Line
+        (" Num_Bypassed_Thread_Initiations :" &
+           Longest_Natural'Image (Total_Bypassed_Thread_Initiations) &
+           " (" &
+           Longest_Natural'Image (Total_Bypassed_Thread_Initiations * 100 /
+             (Total_Bypassed_Thread_Initiations +
+              Total_Unshared_Thread_Initiations +
+              Longest_Natural (Num_Shared_Thread_Initiations))) & "%)");
       New_Line;
 
       if Clear then
@@ -20646,6 +21431,7 @@ package body PSC.Interpreter is
                Info : Server_Info renames Server_Info_Array (I);
             begin
                Info.Num_Unshared_Thread_Initiations := 0;
+               Info.Num_Bypassed_Thread_Initiations := 0;
                Info.Max_Waiting_Unshared_Threads    := 0;
                Info.Num_Waiting_Unshared_Summed     := 0;
             end;
@@ -20734,8 +21520,8 @@ package body PSC.Interpreter is
 
       --  Now schedule the thread for execution
       Spawn_Thread
-        (Master_Addr,
-         Context.Server_Index,
+        (Context,
+         Master_Addr,
          New_Tcb,
          Spawning_Tcb => Spawning_Tcb);
    end Spawn_Parallel_Thread;
@@ -21502,6 +22288,52 @@ package body PSC.Interpreter is
          end loop;
 
       end Server_Creator;
+
+      ---------------
+      -- Caller_Of --
+      ---------------
+
+      function Caller_Of (State : Server_State) return Server_State_Ptr is
+      --  Return pointer to server state for caller of given stack frame.
+      --  Normally this is just State.Prev_State, but if we are crossing
+      --  pico-thread boundaries, we need to retrieve the state from
+      --  the enclosing master.
+         Prev_State : constant Server_State_Ptr := State.Prev_State;
+      begin
+         if State.Context /= null
+           and then State.Context.Control_Area /= null
+           and then
+             (Prev_State = null
+              or else Prev_State.Context = null
+              or else State.Context.Control_Area /=
+                        Prev_State.Context.Control_Area)
+         then
+            --  TCB changed; need to find master and get
+            --  spawner's state from there.
+            declare
+               This_Tcb : constant Word_Ptr := State.Context.Control_Area;
+               Master_Ptr : Word_Ptr := Tcb_Master_Ptr (This_Tcb);
+               Index : Master_Index;
+            begin
+               if Master_Ptr = null then
+                  --  Reached top of program, presumably
+                  return null;
+               else
+                  Index := Index_Of_Master (Master_Ptr);
+                  if Tcb_State (This_Tcb) = Waiting_For_Master then
+                     --  While waiting for a master, the master of the Tcb
+                     --  actually points to the master being awaited,
+                     --  so we get the master enclosing that.
+                     Index := Master_Extras (Index).Enclosing_Master;
+                  end if;
+                  return Master_Extras (Index).State_Of_Master'Access;
+               end if;
+            end;
+         else
+            --  Same TCB
+            return Prev_State;
+         end if;
+      end Caller_Of;
 
       ---------------------
       -- Dump_One_Thread --

@@ -1,3 +1,3 @@
 RUN="pryi ../aaa.pri"
 
-$RUN drinking_phils.pry -command Test_DP 30
+$RUN drinking_phils.pry -command Test_DP 7

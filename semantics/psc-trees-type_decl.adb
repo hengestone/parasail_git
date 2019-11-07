@@ -1,7 +1,7 @@
 ------------------------------------------------------------------------------
 --                              P A R A S A I L                             --
 --                                                                          --
---                     Copyright (C) 2012-2013, AdaCore                     --
+--                     Copyright (C) 2012-2019, AdaCore                     --
 --                                                                          --
 -- This is free software;  you can redistribute it  and/or modify it  under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -86,7 +86,7 @@ package body PSC.Trees.Type_Decl is
          if Indent > 0 then
             --  This is a stand-alone type declaration
             case Languages.Language is
-               when Languages.Sparkel =>
+               when Languages.Ada_Ish =>
                   if not T.Is_New_Type then
                      --  This is a "subtype" decl
                      Indent_For_Def := 0;
@@ -104,7 +104,7 @@ package body PSC.Trees.Type_Decl is
 
       if T.Is_New_Type then
          case Languages.Language is
-            when Languages.Sparkel =>
+            when Languages.Ada_Ish =>
                null;  -- "new" is put out by Module display
             when Languages.ParaSail | Languages.Parython |
               Languages.Javallel =>

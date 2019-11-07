@@ -1901,7 +1901,7 @@ package body PSC.Trees.Semantics.Static is
                   --  or Sparkel and module is treated as a type
                   --  and homonym is the current instance of the
                   --  immediately enclosing module
-                  if Languages.Language = Languages.Sparkel
+                  if Languages.Language in Languages.Ada_Ish
                     and then Hom_And_Sym_In_Same_Region
                     and then Hom.Kind = Type_Sym_Kind
                     and then
@@ -1917,7 +1917,7 @@ package body PSC.Trees.Semantics.Static is
                      return; --  Quit now, don't want to bump into package too
                   end if;
 
-                  if Languages.Language = Languages.Sparkel
+                  if Languages.Language in Languages.Ada_Ish
                     and then Hom_And_Sym_In_Same_Region
                     and then Hom.Kind = Type_Sym_Kind
                     and then Module.Tree
@@ -1939,7 +1939,7 @@ package body PSC.Trees.Semantics.Static is
                   begin
                      if not Hom_And_Sym_In_Same_Region then
                         --  Not same region; see if this is Primary_Nested_Type
-                        if Languages.Language = Languages.Sparkel
+                        if Languages.Language in Languages.Ada_Ish
                           and then not Hom_Mod_Tree.Treat_As_Type
                           and then Sym_Mod_Tree.Treat_As_Type
                           and then Hom.Nested_Region = Sym.Enclosing_Region
@@ -1974,7 +1974,7 @@ package body PSC.Trees.Semantics.Static is
                   --  (this must be the current inst or primary nested type)
                   Illegal_Hiding := False;
 
-                  if Languages.Language = Languages.Sparkel then
+                  if Languages.Language in Languages.Ada_Ish then
                      --  Make sure it is marked as the primary nested type
                      declare
                         Hom_Mod_Sem : constant Module_Sem_Ptr :=
@@ -2012,7 +2012,7 @@ package body PSC.Trees.Semantics.Static is
 
                elsif Hom.Kind = Type_Sym_Kind
                  and then Hom_And_Sym_In_Same_Region
-                 and then Languages.Language = Languages.Sparkel
+                 and then Languages.Language in Languages.Ada_Ish
                  and then Is_Private_Type_Decl (Hom.Definition)
                  and then not Is_Private_Type_Decl (Sym.Definition)
                then
@@ -3259,7 +3259,7 @@ package body PSC.Trees.Semantics.Static is
                   --  Enter "current instance" type name into module region
                   --  unless this is Sparkel.
                   Add_To_Region (Mod_Region, Cur_Inst_Sym);
-               when Languages.Sparkel =>
+               when Languages.Ada_Ish =>
                   if T.Treat_As_Type then
                      --  We don't enter "current instance" of a type into
                      --  the region of its "module" in Sparkel.
@@ -3348,7 +3348,7 @@ package body PSC.Trees.Semantics.Static is
 
       if T.Is_Interface
         and then
-          (Languages.Language /= Languages.Sparkel or else T.Treat_As_Type)
+          (Languages.Language not in Languages.Ada_Ish or else T.Treat_As_Type)
       then
          --  See whether we are defining a builtin type/module.
          Builtin_Type_Init (Mod_Sem, Any_Str, Any_Type);
@@ -17064,7 +17064,7 @@ package body PSC.Trees.Semantics.Static is
 
       if Type_Sem.New_Type_Counter > 1
         or else (Type_Sem.New_Type_Counter = 1
-          and then Languages.Language /= Languages.Sparkel)
+          and then Languages.Language not in Languages.Ada_Ish)
       then
          --  Universal types must be 0 or 1, and only 1 if this is Sparkel
          pragma Assert (not Type_Sem.Is_Universal);
@@ -21131,7 +21131,7 @@ package body PSC.Trees.Semantics.Static is
                end if;
 
                if Type_Sem.New_Type_Counter > 1
-                 or else Languages.Language /= Languages.Sparkel
+                 or else Languages.Language not in Languages.Ada_Ish
                then
                   --  No longer consider the type a "universal" type
                   --  (unless it is the "first" new type and this is Sparkel).
@@ -22675,6 +22675,9 @@ package body PSC.Trees.Semantics.Static is
                        (" Enclosing_Operation is null for return stmt.");
                   end if;
                else
+                  --  Remember Enclosing_Operation for later
+                  Comp_Sem.Op_Sem := Enclosing_Operation;
+
                   if Not_Null (T.Values) then
                      declare
                         Outputs : Lists.List renames

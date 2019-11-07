@@ -1,7 +1,7 @@
 ------------------------------------------------------------------------------
 --                              P A R A S A I L                             --
 --                                                                          --
---                     Copyright (C) 2012-2015, AdaCore                     --
+--                     Copyright (C) 2012-2019, AdaCore                     --
 --                                                                          --
 -- This is free software;  you can redistribute it  and/or modify it  under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -985,7 +985,9 @@ package body PSC.Object_Access is
       --  the "Ref_Const" or "Ref_Var" table of Overall,
       --  if the Mode is "Ref", "Ref_Const," or "Ref_Var."
 
-      if Debug_Object_Access and then How_Combined /= Not_Combined then
+      if Debug_Object_Access and then How_Combined /= Not_Combined
+        and then (How_Combined /= Sequential or else Mode /= Read_Access)
+      then
          Put_Line (" Combining " &
            Read_Write_Combination_Enum'Image (How_Combined) &
            " of mode " & Access_Mode_Enum'Image (Mode));

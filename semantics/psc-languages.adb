@@ -8,11 +8,17 @@
 -- ware  Foundation;  either version 3,  or (at your option) any later ver- --
 -- sion.  This software is distributed in the hope  that it will be useful, --
 -- but WITHOUT ANY WARRANTY;  without even the implied warranty of MERCHAN- --
--- TABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public --
--- License for  more details.  You should have  received  a copy of the GNU --
--- General  Public  License  distributed  with  this  software;   see  file --
--- COPYING3.  If not, go to http://www.gnu.org/licenses for a complete copy --
--- of the license.                                                          --
+-- TABILITY or FITNESS FOR A PARTICULAR PURPOSE.                            --
+--                                                                          --
+-- As a special exception under Section 7 of GPL version 3, you are granted --
+-- additional permissions described in the GCC Runtime Library Exception,   --
+-- version 3.1, as published by the Free Software Foundation. See           --
+-- documentation/COPYING3 and documentation/GCC_RUNTIME3_1 for details.     --
+--                                                                          --
+-- In particular,  you can freely  distribute your programs  built with     --
+-- the ParaSail, Sparkel, Javallel, or Parython compiler, including any     --
+-- required library run-time units written in Ada or in any of the above    --
+-- languages, using any licensing terms  of your choosing.                  --
 --                                                                          --
 -- The ParaSail language and implementation were originally developed by    --
 -- S. Tucker Taft.                                                          --
@@ -32,18 +38,20 @@ package body PSC.Languages is
    end Set_Language;
 
    function Language return Language_Enum is
-   --  Return the current language (ParaSail, Sparkel, Parython, or Javallel)
+   --  Return the current language
+   --    (ParaSail, Sparkel, Ada202X, Parython, or Javallel)
    begin
       return Current_Language;
    end Language;
 
    function Language_Name return String is
-   --  Return the Language Name ("ParaSail," "Sparkel," "Parython",
+   --  Return the Language Name ("ParaSail," "Sparkel," "Ada202x," "Parython",
    --  or "Javallel")
    begin
       case Current_Language is
          when ParaSail => return "ParaSail";
          when Sparkel  => return "Sparkel";
+         when Ada202x  => return "Ada202x";
          when Parython => return "Parython";
          when Javallel => return "Javallel";
       end case;
@@ -51,11 +59,12 @@ package body PSC.Languages is
 
    function Language_Name_LC return String is
    --  Return the Language Name in lower case
-   --  ("parasail", "sparkel", "parython", "javallel");
+   --  ("parasail", "sparkel", "ada202x", "parython", "javallel");
    begin
       case Current_Language is
          when ParaSail => return "parasail";
          when Sparkel  => return "sparkel";
+         when Ada202x  => return "ada202x";
          when Parython => return "parython";
          when Javallel => return "javallel";
       end case;
@@ -67,7 +76,7 @@ package body PSC.Languages is
    begin
       case Current_Language is
          when ParaSail => return False;
-         when Sparkel  => return True;
+         when Ada_Ish  => return True;
          when Parython => return True;
          when Javallel => return True;
       end case;
@@ -79,7 +88,7 @@ package body PSC.Languages is
    begin
       case Current_Language is
          when ParaSail => return "::";
-         when Sparkel  => return ".";
+         when Ada_Ish  => return ".";
          when Parython => return ".";
          when Javallel => return ".";
       end case;
@@ -92,6 +101,7 @@ package body PSC.Languages is
       case Current_Language is
          when ParaSail => return "PSL";
          when Sparkel  => return "SSL";
+         when Ada202x  => return "A2X";
          when Parython => return "PSL";
          when Javallel => return "java";
       end case;
@@ -103,7 +113,7 @@ package body PSC.Languages is
    begin
       case Current_Language is
          when ParaSail => return "Core";
-         when Sparkel  => return "Core";
+         when Ada_Ish  => return "Core";
          when Parython => return "Core";
          when Javallel => return "lang";
       end case;
@@ -115,7 +125,7 @@ package body PSC.Languages is
    begin
       case Current_Language is
          when ParaSail => return "Containers";
-         when Sparkel  => return "Containers";
+         when Ada_Ish  => return "Containers";
          when Parython => return "Containers";
          when Javallel => return "util";
       end case;
@@ -126,7 +136,7 @@ package body PSC.Languages is
    begin
       case Current_Language is
          when ParaSail => return "Any";
-         when Sparkel  => return "Any";
+         when Ada_Ish  => return "Any";
          when Parython => return "Any";
          when Javallel => return "Any";
       end case;
@@ -136,7 +146,7 @@ package body PSC.Languages is
    begin
       case Current_Language is
          when ParaSail => return "Assignable";
-         when Sparkel  => return "Assignable";
+         when Ada_Ish  => return "Assignable";
          when Parython => return "Assignable";
          when Javallel => return "Assignable";
       end case;
@@ -146,7 +156,7 @@ package body PSC.Languages is
    begin
       case Current_Language is
          when ParaSail => return "Boolean";
-         when Sparkel  => return "Boolean";
+         when Ada_Ish  => return "Boolean";
          when Parython => return "Boolean";
          when Javallel => return "Boolean";
       end case;
@@ -156,7 +166,7 @@ package body PSC.Languages is
    begin
       case Current_Language is
          when ParaSail => return "Ordering";
-         when Sparkel  => return "Ordering";
+         when Ada_Ish  => return "Ordering";
          when Parython => return "Ordering";
          when Javallel => return "Ordering";
       end case;
@@ -166,7 +176,7 @@ package body PSC.Languages is
    begin
       case Current_Language is
          when ParaSail => return "Univ_Integer";
-         when Sparkel  => return "Univ_Integer";
+         when Ada_Ish  => return "Univ_Integer";
          when Parython => return "Univ_Integer";
          when Javallel => return "UnivInteger";
       end case;
@@ -176,7 +186,7 @@ package body PSC.Languages is
    begin
       case Current_Language is
          when ParaSail => return "Univ_Real";
-         when Sparkel  => return "Univ_Real";
+         when Ada_Ish  => return "Univ_Real";
          when Parython => return "Univ_Real";
          when Javallel => return "UnivReal";
       end case;
@@ -186,7 +196,7 @@ package body PSC.Languages is
    begin
       case Current_Language is
          when ParaSail => return "Univ_Character";
-         when Sparkel  => return "Univ_Character";
+         when Ada_Ish  => return "Univ_Character";
          when Parython => return "Univ_Character";
          when Javallel => return "UnivCharacter";
       end case;
@@ -196,7 +206,7 @@ package body PSC.Languages is
    begin
       case Current_Language is
          when ParaSail => return "Univ_String";
-         when Sparkel  => return "Univ_String";
+         when Ada_Ish  => return "Univ_String";
          when Parython => return "Univ_String";
          when Javallel => return "UnivString";
       end case;
@@ -206,7 +216,7 @@ package body PSC.Languages is
    begin
       case Current_Language is
          when ParaSail => return "Univ_Enumeration";
-         when Sparkel  => return "Univ_Enumeration";
+         when Ada_Ish  => return "Univ_Enumeration";
          when Parython => return "Univ_Enumeration";
          when Javallel => return "UnivEnumeration";
       end case;
@@ -216,7 +226,7 @@ package body PSC.Languages is
    begin
       case Current_Language is
          when ParaSail => return "Optional";
-         when Sparkel  => return "Optional";
+         when Ada_Ish  => return "Optional";
          when Parython => return "Optional";
          when Javallel => return "Optional";
       end case;
@@ -226,7 +236,7 @@ package body PSC.Languages is
    begin
       case Current_Language is
          when ParaSail => return "null";
-         when Sparkel  => return "null";
+         when Ada_Ish  => return "null";
          when Parython => return "null";
          when Javallel => return "null";
       end case;
@@ -236,7 +246,7 @@ package body PSC.Languages is
    begin
       case Current_Language is
          when ParaSail => return "Integer";
-         when Sparkel  => return "Integer";
+         when Ada_Ish  => return "Integer";
          when Parython => return "Integer";
          when Javallel => return "Integer";
       end case;
@@ -246,7 +256,7 @@ package body PSC.Languages is
    begin
       case Current_Language is
          when ParaSail => return "Float";
-         when Sparkel  => return "Float";
+         when Ada_Ish  => return "Float";
          when Parython => return "Float";
          when Javallel => return "Float";
       end case;
@@ -256,7 +266,7 @@ package body PSC.Languages is
    begin
       case Current_Language is
          when ParaSail => return "Basic_Array";
-         when Sparkel  => return "Basic_Array";
+         when Ada_Ish  => return "Basic_Array";
          when Parython => return "Basic_Array";
          when Javallel => return "BasicArray";
       end case;
@@ -267,6 +277,7 @@ package body PSC.Languages is
       case Current_Language is
          when ParaSail => return "PSC::Debugging::Console";
          when Sparkel  => return "SSC.Debugging.Console";
+         when Ada202x  => return "A2C.Debugging.Console";
          when Parython => return "PSC.Debugging.Console";
          when Javallel => return "java.util.debugging.Console";
       end case;
@@ -276,7 +287,7 @@ package body PSC.Languages is
    begin
       case Current_Language is
          when ParaSail => return """from_univ""";
-         when Sparkel  => return """from_univ""";
+         when Ada_Ish  => return """from_univ""";
          when Parython => return """from_univ""";
          when Javallel => return """from_univ""";
       end case;
@@ -286,7 +297,7 @@ package body PSC.Languages is
    begin
       case Current_Language is
          when ParaSail => return """to_univ""";
-         when Sparkel  => return """to_univ""";
+         when Ada_Ish  => return """to_univ""";
          when Parython => return """to_univ""";
          when Javallel => return """to_univ""";
       end case;
@@ -296,7 +307,7 @@ package body PSC.Languages is
    begin
       case Current_Language is
          when ParaSail => return "Remove_First";
-         when Sparkel  => return "Remove_First";
+         when Ada_Ish  => return "Remove_First";
          when Parython => return "Remove_First";
          when Javallel => return "removeFirst";
       end case;
@@ -306,7 +317,7 @@ package body PSC.Languages is
    begin
       case Current_Language is
          when ParaSail => return "Remove_Last";
-         when Sparkel  => return "Remove_Last";
+         when Ada_Ish  => return "Remove_Last";
          when Parython => return "Remove_Last";
          when Javallel => return "removeLast";
       end case;
@@ -316,7 +327,7 @@ package body PSC.Languages is
    begin
       case Current_Language is
          when ParaSail => return "Remove_Any";
-         when Sparkel  => return "Remove_Any";
+         when Ada_Ish  => return "Remove_Any";
          when Parython => return "Remove_Any";
          when Javallel => return "removeAny";
       end case;
@@ -326,7 +337,7 @@ package body PSC.Languages is
    begin
       case Current_Language is
          when ParaSail => return "=?";
-         when Sparkel  => return "=?";
+         when Ada_Ish  => return "=?";
          when Parython => return "=?";
          when Javallel => return "=?";
       end case;
@@ -360,6 +371,7 @@ package body PSC.Languages is
       case Current_Language is
          when ParaSail => return "PSL::Core::Univ_String";
          when Sparkel  => return "SSL.Core.Univ_String";
+         when Ada202x  => return "A2X.Core.Univ_String";
          when Parython => return "PSL.Core.Univ_String";
          when Javallel => return "java.lang.UnivString";
       end case;
@@ -370,6 +382,7 @@ package body PSC.Languages is
       case Current_Language is
          when ParaSail => return "PSL::Core::Operation_Descriptor";
          when Sparkel  => return "SSL.Core.Operation_Descriptor";
+         when Ada202x  => return "A2X.Core.Operation_Descriptor";
          when Parython => return "PSL.Core.Operation_Descriptor";
          when Javallel => return "java.lang.OperationDescriptor";
       end case;
@@ -382,6 +395,8 @@ package body PSC.Languages is
            "PSL::Containers::Basic_Array<optional PSL::Core::Univ_Integer>";
          when Sparkel  => return
            "SSL.Containers.Basic_Array<optional SSL.Core.Univ_Integer>";
+         when Ada202x  => return
+           "A2X.Containers.Basic_Array<optional SSL.Core.Univ_Integer>";
          when Parython => return
            "PSL.Containers.Basic_Array<optional PSL.Core.Univ_Integer>";
          when Javallel => return
@@ -396,6 +411,8 @@ package body PSC.Languages is
            "PSL::Containers::Basic_Array<PSL::Core::Univ_String>";
          when Sparkel  => return
            "SSL.Containers.Basic_Array<SSL.Core.Univ_String>";
+         when Ada202x  => return
+           "A2X.Containers.Basic_Array<SSL.Core.Univ_String>";
          when Parython => return
            "PSL.Containers.Basic_Array<PSL.Core.Univ_String>";
          when Javallel => return

@@ -50,6 +50,7 @@ COMPLIBS=$(MATHLIB)
 
 .PHONY: build all all_no_gtk local-install clean parasail parser 
 .PHONY: sparkel sparkel_parser build_sparkel sparkel_doc
+.PHONY: ada202x ada202x_parser build_ada202x
 .PHONY: parasail_gtk build_no_gtk
 .PHONY: javallel javallel_parser build_javallel
 .PHONY: parython parython_gtk parython_parser build_parython build_parython_gtk
@@ -57,9 +58,9 @@ COMPLIBS=$(MATHLIB)
 .PHONY: compiled_main compiled_main_with_interp
 .PHONY: do_psltags do_atags
 
-all: config build do_psltags do_atags doc build_sparkel build_javallel build_parython_gtk sparkel_doc test_runtime local-install
+all: config build do_psltags do_atags doc build_sparkel build_ada202x build_javallel build_parython_gtk sparkel_doc test_runtime local-install
 
-all_no_gtk: config build_no_gtk doc build_sparkel build_javallel build_parython sparkel_doc test_runtime local-install
+all_no_gtk: config build_no_gtk do_psltags do_atags doc build_sparkel build_ada202x build_javallel build_parython sparkel_doc test_runtime local-install
 
 config: semantics/psc-link_names.ads
 	cd interpreter; ./config.sh $(OMP)
@@ -72,6 +73,8 @@ build: parser parasail check_compiled_main parasail_gtk
 build_no_gtk: parser check_compiled_main parasail
 
 build_sparkel: sparkel_parser sparkel
+
+build_ada202x: ada202x_parser ada202x
 
 build_javallel: javallel_parser javallel
 
@@ -101,6 +104,9 @@ parser:
 sparkel_parser:
 	$(MAKE) -C sparkel_parser/build
 
+ada202x_parser:
+	$(MAKE) -C ada202x_parser/build
+
 javallel_parser:
 	$(MAKE) -C javallel_parser/build
 
@@ -118,6 +124,10 @@ parasail_gtk: gtk_libs
 sparkel: cleantestsuite
 	@mkdir -p build/bin build/obj
 	$(GPRBUILD) $(ADAFLAGS) -P build/sparkel -largs $(EXTRALIBS)
+
+ada202x: cleantestsuite
+	@mkdir -p build/bin build/obj
+	$(GPRBUILD) $(ADAFLAGS) -P build/ada202x -largs $(EXTRALIBS)
 
 javallel: cleantestsuite
 	@mkdir -p build/bin build/obj
@@ -173,6 +183,7 @@ local-install:
 	-cp -p lib/*.ps? install/lib
 	-cp -p lib/aaa/*.ps?  install/lib/aaa
 	-cp -p bin/pslc.csh install/bin/pslc.csh
+	-cp -p bin/interp.csh install/bin/interp.csh
 	-cp -p bin/scope.csh install/bin/scope.csh
 	-cp -p build/bin/parasail_main_gtk install/bin/psli
 	-cp -p build/bin/parasail_main install/bin/psli_no_gtk
@@ -187,6 +198,13 @@ local-install:
 	-cp -p sparkel_examples/*.sk? install/share/examples/sparkel
 	-cp -p build/bin/sparkel_main install/bin/skli
 	-cp -p share/sparkel_tools/* install/share/tools/sparkel
+	$(RM) install/share/examples/ada202x
+	$(RM) install/share/doc/ada202x
+	@mkdir -p install/share/examples/ada202x
+	@mkdir -p install/share/tools/ada202x
+	-cp -p ada202x_examples/*.a2? install/share/examples/ada202x
+	-cp -p build/bin/ada202x_main install/bin/a2xi
+	-cp -p share/ada202x_tools/* install/share/tools/ada202x
 	$(RM) install/share/examples/javallel
 	$(RM) install/share/doc/javallel
 	@mkdir -p install/share/examples/javallel
@@ -207,6 +225,7 @@ local-install:
 cleantestsuite:
 	cd testsuite/ParaSail; ../support/clean.sh
 	cd testsuite/Sparkel;  ../support/clean.sh
+	cd testsuite/Ada202x;  ../support/clean.sh
 	cd testsuite/Parython; ../support/clean.sh
 	cd testsuite/Javallel; ../support/clean.sh
 
@@ -221,10 +240,12 @@ clean: cleanconfig
 	$(MAKE) -C documentation/ref_manual clean
 	$(MAKE) -C parser/build clean-all
 	-gnatclean -q -r -P build/sparkel
+	-gnatclean -q -r -P build/ada202x
 	-gnatclean -q -r -P build/javallel
 	-gnatclean -q -r -P build/parython
 	-gnatclean -q -r -P build/test_runtime
 	$(MAKE) -C documentation/sparkel_ref_manual clean
 	$(MAKE) -C sparkel_parser/build clean
+	$(MAKE) -C ada202x_parser/build clean
 	$(MAKE) -C javallel_parser/build clean
 	$(MAKE) -C parython_parser/build clean

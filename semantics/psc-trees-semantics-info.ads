@@ -592,6 +592,9 @@ private package PSC.Trees.Semantics.Info is
       Overridden_By : Operation_Sem_Ptr := null;
       --  If non-null, then this (inherited) operation has been overridden
 
+      Return_Effects_RW : Object_Access.Read_Write_Mapping;
+      --  The combined effects of all returns from this operation
+
       Uplevel_Refs : Object_Access.Read_Write_Mapping;
       --  For nested operations, information on up-level references.
 

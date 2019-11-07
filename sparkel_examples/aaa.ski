@@ -326,7 +326,7 @@ package SSL.Core.Vector is
 
     func "[]"() return Vector
     func Create(Length : Univ_Integer; Initial_Value : Element_Type)
-      return Vector
+      {Length >= 0} return Vector
     func "indexing"(ref V : Vector; Index : Univ_Integer) return 
       ref Element_Type
     func "index_set"(V : Vector) return Countable_Set<Univ_Integer>
@@ -532,7 +532,8 @@ package body SSL.Core.Vector is
                 Data => null, Subvecs => null)
     end func "[]"
 
-    func Create(Length : Univ_Integer; Initial_Value : Element_Type) {N >= 0} 
+    func Create(Length : Univ_Integer; Initial_Value : Element_Type)
+      {Length >= 0} 
         return Vector is
 
         if Length <= Leaf_Vec_Capacity then
@@ -1100,11 +1101,124 @@ package body SSL.Core.Univ_Character is
     end func Last
 end package SSL.Core.Univ_Character
 
+package SSL.Core.Comparable is
+    type Comparable is abstract private; -- new Assignable;
+    abstract func "=?"(Left, Right : Comparable) return Ordering
+end package SSL.Core.Comparable
+
+package SSL.Core.Hashable is
+    type Hashable is abstract new Comparable;
+    -- Types which aren't ordered nevertheless are often
+    -- hashable, which makes it possible to create an efficient
+    -- set or map using them as the index type.
+
+    --  func "=?"(Left, Right : Hashable) return Ordering
+    --  TBD: overriding of abstracts NYI
+    abstract func Hash(Val : Hashable) return Univ_Integer
+end package SSL.Core.Hashable
+
+generic
+    type Element_Type is new Hashable
+package SSL.Containers.Set is
+  -- A hashed-set module
+    type Set is private
+
+    func "[]"() return Set
+
+    func Singleton(Elem : Element_Type) return Set
+
+    func "|"(Left, Right : Element_Type) return Set
+    func "|"(Left : Set; Right : Element_Type) return Set
+    func "|"(Left : Element_Type; Right : Set) return Set
+    func "|"(Left : Set; Right : Set) return Set
+
+    proc "|="(var Left : Set; Right : Set)
+
+    proc "|="(var Left : Set; Right : Element_Type)
+	-- Add element to Set.
+
+    proc "<|="(var Left : Set; var Right : optional Element_Type)
+	-- Move element into Set.
+
+    proc "<|="(var Left : Set; var Right : Set)
+	-- Move all elements of Right into Left, leaving Right empty.
+
+    func "in"(Left : Element_Type; Right : Set) return Boolean
+
+    func "=?"(Left, Right : Set) return Ordering
+	-- Return #equal if Left and Right have the same elements
+	-- Return #less if Left is a proper subset of Right
+	-- Return #greater if Left is a proper superset of Right
+	-- Return #unordered otherwise
+
+    func "or"(Left, Right : Set) return Set is "|"  -- Union
+    proc "or="(var Left : Set; Right : Set) is "|="
+
+    func "+"(Left, Right : Set) return Set is "|"   -- Union
+    proc "+="(var Left : Set; Right : Set) is "|="
+    proc "+="(var Left : Set; Right : Element_Type) is "|="   -- aka Include
+
+    func "and"(Left, Right : Set) return Set
+	-- Intersection
+    proc "and="(var Left : Set; Right : Set)
+
+    func "xor"(Left, Right : Set) return Set
+	-- Symmetric difference
+    proc "xor="(var Left : Set; Right : Set)
+
+    func "-"(Left, Right : Set) return Set
+	-- Set difference
+
+    proc "-="(var Left : Set; Right : Set)
+	-- Compute Set difference
+
+    proc "-="(var S : Set; Elem : Element_Type)   -- aka Exclude
+	-- Remove one element, if present
+
+    func Count(S : Set) return Univ_Integer
+
+    func "magnitude"(Set) return Univ_Integer is Count
+
+    func Is_Empty(S : Set) return Boolean
+
+    func Remove_Any(var S : Set) return optional Element_Type
+      -- Remove and return an arbitrary element of the Set S
+
+    proc Dump_Statistics(S : Set)
+      -- A debugging routine to show bucket sizes of Set
+
+end package SSL.Containers.Set
+
+package SSL.Core.Univ_Enumeration is
+    type Univ_Enumeration is private;
+
+    func "=?"(Left, Right : Univ_Enumeration) return Ordering 
+      is import(#unordered_compare)
+    proc Print(Val : Univ_Enumeration) 
+      is import(#print_univ_enum)
+
+    proc Put(Val : Univ_Enumeration) is Print
+
+    func Image(Val : Univ_Enumeration) return Univ_String
+      is import(#to_string_enum)
+
+    func Value(Str : Univ_String) return optional Univ_Enumeration
+      is import(#from_string_enum)
+
+    func Hash(Val : Univ_Enumeration) return Univ_Integer
+      is import(#hash_enum)
+
+    func "in"(Left : Univ_Enumeration; Right : Set<Univ_Enumeration>) 
+      return Boolean
+      is of Set<Univ_Enumeration>
+
+end package SSL.Core.Univ_Enumeration
+
 package SSL.Core.Boolean is
     type Boolean is private;
 
     func "from_univ"(Lit : Univ_Enumeration) 
-      {Lit in [#False | #True]}
+      {Lit in [#False, #True]}
       return Boolean is import(#sparkel_bool_from_univ)
 
     func "to_univ"(Val : Boolean) return Univ_Enumeration 
@@ -1240,11 +1354,6 @@ end proc SSL.Test.Test_Boolean
 --     func "is null"(Optional) return Boolean
 -- end package SSL.Core.Optional
 -- 
-package SSL.Core.Comparable is
-    type Comparable is abstract private; -- new Assignable;
-    abstract func "=?"(Left, Right : Comparable) return Ordering
-end package SSL.Core.Comparable
-
 package SSL.Core.Ordered is
     type Ordered is abstract new Comparable;
   -- The "=?" operator on Ordered types never return s #unordered
@@ -1266,17 +1375,6 @@ package SSL.Core.Ordered is
     abstract func Min(Left, Right : optional Ordered) return optional Ordered
     abstract func Max(Left, Right : optional Ordered) return optional Ordered
 end package SSL.Core.Ordered
-
-package SSL.Core.Hashable is
-    type Hashable is abstract new Comparable;
-    -- Types which aren't ordered nevertheless are often
-    -- hashable, which makes it possible to create an efficient
-    -- set or map using them as the index type.
-
-    --  func "=?"(Left, Right : Hashable) return Ordering
-    --  TBD: overriding of abstracts NYI
-    abstract func Hash(Val : Hashable) return Univ_Integer
-end package SSL.Core.Hashable
 
 generic
     type Element_Type is new Assignable
@@ -2819,7 +2917,7 @@ package SSL.Core.Ordering is
     type Ordering is private;
 
     func "from_univ"(Lit : Univ_Enumeration) 
-      {Lit in [#less | #equal | #greater | #unordered]}
+      {Lit in [#less, #equal, #greater, #unordered]}
       return Ordering is import(#ordering_from_univ)
 
     func "to_univ"(Val : Ordering) return Univ_Enumeration 
@@ -2924,31 +3022,6 @@ package body SSL.Core.Ordering is
         return Ordering_Set'"|"(Left, Right)
     end func "|"
 end package SSL.Core.Ordering
-
-package SSL.Core.Univ_Enumeration is
-    type Univ_Enumeration is private;
-
-    func "=?"(Left, Right : Univ_Enumeration) return Ordering 
-      is import(#unordered_compare)
-    proc Print(Val : Univ_Enumeration) 
-      is import(#print_univ_enum)
-
-    proc Put(Val : Univ_Enumeration) is Print
-
-    func Image(Val : Univ_Enumeration) return Univ_String
-      is import(#identity)
-
-    func Value(Str : Univ_String) return optional Univ_Enumeration
-      is import(#identity)
-
-    func Hash(Val : Univ_Enumeration) return Univ_Integer
-      is import(#identity)
-
-    func "in"(Left : Univ_Enumeration; Right : Set<Univ_Enumeration>) 
-      return Boolean
-      is of Set<Univ_Enumeration>
-
-end package SSL.Core.Univ_Enumeration
 
 generic
   Range : Countable_Range<Univ_Integer> := -2**62 .. +2**62
@@ -4055,78 +4128,6 @@ proc SSL.Test.Test_Basic_Map(X : Univ_Enumeration; Y : Univ_String;
     end if
 
 end proc SSL.Test.Test_Basic_Map
-
-generic
-    type Element_Type is new Hashable
-package SSL.Containers.Set is
-  -- A hashed-set module
-    type Set is private
-
-    func "[]"() return Set
-
-    func Singleton(Elem : Element_Type) return Set
-
-    func "|"(Left, Right : Element_Type) return Set
-    func "|"(Left : Set; Right : Element_Type) return Set
-    func "|"(Left : Element_Type; Right : Set) return Set
-    func "|"(Left : Set; Right : Set) return Set
-
-    proc "|="(var Left : Set; Right : Set)
-
-    proc "|="(var Left : Set; Right : Element_Type)
-	-- Add element to Set.
-
-    proc "<|="(var Left : Set; var Right : optional Element_Type)
-	-- Move element into Set.
-
-    proc "<|="(var Left : Set; var Right : Set)
-	-- Move all elements of Right into Left, leaving Right empty.
-
-    func "in"(Left : Element_Type; Right : Set) return Boolean
-
-    func "=?"(Left, Right : Set) return Ordering
-	-- Return #equal if Left and Right have the same elements
-	-- Return #less if Left is a proper subset of Right
-	-- Return #greater if Left is a proper superset of Right
-	-- Return #unordered otherwise
-
-    func "or"(Left, Right : Set) return Set is "|"  -- Union
-    proc "or="(var Left : Set; Right : Set) is "|="
-
-    func "+"(Left, Right : Set) return Set is "|"   -- Union
-    proc "+="(var Left : Set; Right : Set) is "|="
-    proc "+="(var Left : Set; Right : Element_Type) is "|="   -- aka Include
-
-    func "and"(Left, Right : Set) return Set
-	-- Intersection
-    proc "and="(var Left : Set; Right : Set)
-
-    func "xor"(Left, Right : Set) return Set
-	-- Symmetric difference
-    proc "xor="(var Left : Set; Right : Set)
-
-    func "-"(Left, Right : Set) return Set
-	-- Set difference
-
-    proc "-="(var Left : Set; Right : Set)
-	-- Compute Set difference
-
-    proc "-="(var S : Set; Elem : Element_Type)   -- aka Exclude
-	-- Remove one element, if present
-
-    func Count(S : Set) return Univ_Integer
-
-    func "magnitude"(Set) return Univ_Integer is Count
-
-    func Is_Empty(S : Set) return Boolean
-
-    func Remove_Any(var S : Set) return optional Element_Type
-      -- Remove and return an arbitrary element of the Set S
-
-    proc Dump_Statistics(S : Set)
-      -- A debugging routine to show bucket sizes of Set
-
-end package SSL.Containers.Set
 
 package body SSL.Containers.Set is
   -- A hashed-set module
@@ -5769,7 +5770,7 @@ package body SSL.Core.Time is
 
     func Kind_Of_Year(Year : Univ_Integer) return Year_Kind is
         if Year mod 4 = 0 and then
-          (Year mod 100 != 0 or else Year mod 400 = 0) then
+          (Year mod 100 /= 0 or else Year mod 400 = 0) then
             -- Every 100 years leap year is omitted, 
             -- except for multiples of 400 which *are* leap years.
             return #leap
@@ -6492,7 +6493,7 @@ package SSL.Core.Enum_With_Rep is
     func "to_univ"(Val : optional Enum_With_Rep)
       return Result : optional Univ_Enumeration
       {Result is null or else
-        (for some [Lit => Val] of Literals => Lit = Result)}
+        (for some [Lit => Value] of Rep_Map => Lit = Result)}
 
     -- Functions to convert from/to rep
     func From_Rep (Rep : optional Rep_Type) return optional Enum_With_Rep

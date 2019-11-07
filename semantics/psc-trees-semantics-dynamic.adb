@@ -1249,6 +1249,12 @@ package body PSC.Trees.Semantics.Dynamic is
 
          Pre_Cg (T.Statements, Read_Write);
 
+         --  Combine in the effects of all return statements
+         Object_Access.Combine
+           (Read_Write,
+            Op_Sem.Return_Effects_RW,
+            Object_Access.Sequential);
+
          Object_Access.Extract_Uplevel_Refs
            (Op_Region => Op_Sem.Associated_Symbol.Nested_Region,
             All_Refs => Read_Write,
@@ -2414,12 +2420,19 @@ package body PSC.Trees.Semantics.Dynamic is
             --  No code to generate for a "null" statement
             null;
          when Return_Stmt =>
-            --  We do *not* include references to the return value(s) in
-            --  the read/write map for the Visitor, since these reads
-            --  happen after all other threads are finished, so no race
-            --  conditions are possible.
-            Pre_Cg (T.Values, Visitor.Read_Write,
-              How_Combined => Object_Access.Not_Combined);
+            declare
+               Enclosing_Operation : constant Operation_Sem_Ptr :=
+                 Comp_Sem.Op_Sem;
+            begin
+               --  We do *not* include references to the return value(s) in
+               --  the read/write map for the Visitor, since these reads
+               --  happen after all other threads are finished, so no race
+               --  conditions are possible.  Instead, we combine them
+               --  into a "Return_Effects_RW" associated with the enclosing
+               --  operation where eventually the up-level effects will
+               --  be incorporated into the Uplevel_Refs mapping.
+               Pre_Cg (T.Values, Enclosing_Operation.Return_Effects_RW);
+            end;
 
          when Continue_Stmt =>
 
@@ -2496,7 +2509,7 @@ package body PSC.Trees.Semantics.Dynamic is
         Annotation_Mode => Visitor.Annotation_Mode);
 
       --  Combine in the exit effects, which effectively happen after
-      --  the block is done.
+      --  the conditional is done.
       Object_Access.Combine
         (Visitor.Read_Write,
          Addition => Comp_Sem.Exit_Effects_RW,
@@ -12695,6 +12708,22 @@ package body PSC.Trees.Semantics.Dynamic is
          end if;
       end Nth_Continue_Value;
 
+      function Param_Offset (Iter_Index : Positive)
+        return Offset_Within_Area is
+         --  return offset in param area to use for given iterator
+         --  This is only used when body is a nested block
+         pragma Assert
+           (For_Loop_Sem.Uses_Parallel_Nested_Block);
+         Iter_Sem : constant Iterator_Sem_Ptr :=
+           For_Loop_Sem.Iterator_Sems (Iter_Index);
+         Loop_Param : constant Param_Sem_Ptr :=
+           Iterator_Loop_Param_Sem (Iter_Sem);
+      begin
+         pragma Assert
+           (Loop_Param.Info.Obj_Location.Base = Param_Area);
+         return Loop_Param.Info.Obj_Location.Offset;
+      end Param_Offset;
+
    begin  --  Next_For_Loop_Iteration
 
       if Num_Values_Needed > 0 then
@@ -12738,39 +12767,6 @@ package body PSC.Trees.Semantics.Dynamic is
             Loop_Visitor.Target_Local_Offset :=
               Loop_Visitor.Target_Local_Offset + 1;
 
-            if For_Loop_Sem.Uses_Parallel_Nested_Block then
-               --  Allocate space for TCB out of master's region
-
-               --  But first set up the VM info
-               Create_Tcb_VM_Info := Assign_VM_Obj_Id (Loop_Visitor);
-
-               Add_Parallel_VM_Info :=
-                 Assign_VM_Obj_Id (Loop_Visitor,
-                                   Needs_Var => True,
-                                   Target_VM_Num => Create_Tcb_VM_Info.Num,
-                                   Num_Call_Params =>
-                                     For_Loop_Sem.Iterator_Sems'Length);
-
-               Emit
-                 (Loop_Visitor,
-                  (Create_Tcb_Op,
-                   Source_Pos => Find_Source_Pos (For_Loop_Sem.Definition),
-                   Parallel_Master =>
-                      Adjust_For_Level_And_Prefix
-                        (Loop_Visitor.Current_Level,
-                         (Local_Area, For_Loop_Sem.For_Loop_Master,
-                          No_VM_Obj_Id),
-                         For_Loop_Sem.For_Loop_Level),
-                   Parallel_Control =>
-                     (Local_Area, Tcb_Offset, Create_Tcb_VM_Info),
-                   Parallel_Static_Link => Adjust_For_Level_And_Prefix
-                                             (Loop_Visitor.Current_Level,
-                                              (Local_Area, 0, No_VM_Obj_Id),
-                                              For_Loop_Sem.For_Loop_Level),
-                   Num_In_Params  => For_Loop_Sem.Iterator_Sems'Length,
-                   Num_Out_Params => 0));
-            end if;
-
             --  Generate next values for each iterator
             for Iter_Index in For_Loop_Sem.Iterator_Sems'Range loop
                declare
@@ -12780,19 +12776,6 @@ package body PSC.Trees.Semantics.Dynamic is
                     renames Iterator.Tree
                       (Tree_Ptr_Of (Iter_Sem.Definition).all);
                   Next_Value_Location : Object_Locator;
-
-                  function Param_Offset return Offset_Within_Area is
-                     --  return offset in param area to use for given iterator
-                     --  This is only used when body is a nested block
-                     pragma Assert
-                       (For_Loop_Sem.Uses_Parallel_Nested_Block);
-                     Loop_Param : constant Param_Sem_Ptr :=
-                       Iterator_Loop_Param_Sem (Iter_Sem);
-                  begin
-                     pragma Assert
-                       (Loop_Param.Info.Obj_Location.Base = Param_Area);
-                     return Loop_Param.Info.Obj_Location.Offset;
-                  end Param_Offset;
 
                   use type Iterator.Iterator_Kind_Enum;
                begin
@@ -12824,31 +12807,63 @@ package body PSC.Trees.Semantics.Dynamic is
                           --       of Remove_* set parameter.
                   end if;
 
-                  --  This moves the next value into the appropriate param slot
-                  if For_Loop_Sem.Uses_Parallel_Nested_Block then
-                     Emit
-                       (Loop_Visitor,
-                        (Copy_Word_Op,
-                         Source_Pos => Find_Source_Pos (Iter_Sem.Definition),
-                         Destination => (Phys_Base_Register (Tcb_Offset),
-                                         Thread_Control_Block_Size +
-                                           Param_Offset,
-                                         Param_VM_Obj_Id (Add_Parallel_VM_Info,
-                                           Natural (Param_Offset))),
-                         Dest_Name => Strings.Null_U_String_Index,
-                         Source => Next_Value_Location,
-                         Might_Be_Null => True));
-                  else
-                     --  Remember next value location in array for later use.
-                     --  We don't want to overwrite the loop param yet
-                     --  in case it is used to compute the next value for
-                     --  other loop params.
-                     Next_Value_Locators (Iter_Index) := Next_Value_Location;
-                  end if;
+                  --  Remember next value location in array for later use.
+                  --  We don't want to overwrite the loop param yet
+                  --  in case it is used to compute the next value for
+                  --  other loop params.
+                  Next_Value_Locators (Iter_Index) := Next_Value_Location;
                end;
             end loop;
 
             if For_Loop_Sem.Uses_Parallel_Nested_Block then
+               --  Allocate space for TCB out of master's region
+
+               --  But first set up the VM info
+               Create_Tcb_VM_Info := Assign_VM_Obj_Id (Loop_Visitor);
+
+               Add_Parallel_VM_Info :=
+                 Assign_VM_Obj_Id (Loop_Visitor,
+                                   Needs_Var => True,
+                                   Target_VM_Num => Create_Tcb_VM_Info.Num,
+                                   Num_Call_Params =>
+                                     For_Loop_Sem.Iterator_Sems'Length);
+
+               Emit
+                 (Loop_Visitor,
+                  (Create_Tcb_Op,
+                   Source_Pos => Find_Source_Pos (For_Loop_Sem.Definition),
+                   Parallel_Master =>
+                      Adjust_For_Level_And_Prefix
+                        (Loop_Visitor.Current_Level,
+                         (Local_Area, For_Loop_Sem.For_Loop_Master,
+                          No_VM_Obj_Id),
+                         For_Loop_Sem.For_Loop_Level),
+                   Parallel_Control =>
+                     (Local_Area, Tcb_Offset, Create_Tcb_VM_Info),
+                   Parallel_Static_Link => Adjust_For_Level_And_Prefix
+                                             (Loop_Visitor.Current_Level,
+                                              (Local_Area, 0, No_VM_Obj_Id),
+                                              For_Loop_Sem.For_Loop_Level),
+                   Num_In_Params  => For_Loop_Sem.Iterator_Sems'Length,
+                   Num_Out_Params => 0));
+
+               --  Copy new values into the param area following the TCB
+               for I in Next_Value_Locators'Range loop
+                  Emit
+                    (Loop_Visitor,
+                     (Copy_Word_Op,
+                      Source_Pos => Find_Source_Pos
+                        (For_Loop_Sem.Iterator_Sems (I).Definition),
+                      Destination => (Phys_Base_Register (Tcb_Offset),
+                                      Thread_Control_Block_Size +
+                                        Param_Offset (I),
+                                      Param_VM_Obj_Id (Add_Parallel_VM_Info,
+                                        Natural (Param_Offset (I)))),
+                      Dest_Name => Strings.Null_U_String_Index,
+                      Source => Next_Value_Locators (I),
+                      Might_Be_Null => True));
+               end loop;
+
                --  Generate call using new set of values
                Emit
                  (Loop_Visitor,
@@ -12874,6 +12889,7 @@ package body PSC.Trees.Semantics.Dynamic is
                    Parallel_Code_Block => Null_Code_Block_Descriptor));
                      --  will be fixed up at end of operation
                      --  and in Emit_Nested_Block_Finish
+
                if Not_Null (Continue_With_Values) then
                   --  Use the "continues" index as the invoker index.
                   Invoker_Index := For_Loop_Sem.Num_Continues_Emitted;

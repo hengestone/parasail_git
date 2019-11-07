@@ -1,7 +1,7 @@
 ------------------------------------------------------------------------------
 --                              P A R A S A I L                             --
 --                                                                          --
---                     Copyright (C) 2012-2015, AdaCore                     --
+--                     Copyright (C) 2012-2019, AdaCore                     --
 --                                                                          --
 -- This is free software;  you can redistribute it  and/or modify it  under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -34,6 +34,7 @@ package body PSC.Trees.For_Loop_Construct is
       Filter : Lists.List;
       Loop_Body : Optional_Tree;
       Direction : Strings.U_String := Strings.Null_U_String;
+      Chunk_Spec : Optional_Tree := Null_Optional_Tree;
       End_With_Values : Optional_Tree := Null_Optional_Tree;
       Label : Optional_Tree := Null_Optional_Tree;
       Check_Label : Boolean := True)
@@ -54,6 +55,7 @@ package body PSC.Trees.For_Loop_Construct is
                       Filter => Filtering_Annotation,
                       Loop_Body => Loop_Body,
                       Direction => Direction,
+                      Chunk_Spec => Chunk_Spec,
                       End_With_Values => End_With_Values,
                       Label => Label,
                       Check_Label => Check_Label));
@@ -73,6 +75,7 @@ package body PSC.Trees.For_Loop_Construct is
                       Filter => Original.Filter,
                       Loop_Body => New_Body,
                       Direction => Original.Direction,
+                      Chunk_Spec => Original.Chunk_Spec,
                       End_With_Values => Original.End_With_Values,
                       Label => Original.Label,
                       Check_Label => Original.Check_Label));
@@ -255,6 +258,13 @@ package body PSC.Trees.For_Loop_Construct is
                Display_Subtree (T.Label, On);
                Put_Line (On, "*");
             end if;
+            if Not_Null (T.Chunk_Spec) then
+               --  Ada 202X chunking specification
+               Put_Indent (On, Indent);
+               Put (On, "parallel (");
+               Display_Subtree (T.Chunk_Spec, On);
+               Put_Line (On, ")");
+            end if;
             Put_Indent (On, Indent);
             Put (On, "for ");
             if Lists.Length (T.Iterators) > 1 then
@@ -281,7 +291,9 @@ package body PSC.Trees.For_Loop_Construct is
                Put (On, ' ');
                Display_Subtree (T.Filter, On);
             end if;
-            if T.Direction /= Strings.Null_U_String then
+            if T.Direction /= Strings.Null_U_String
+              and then Is_Null (T.Chunk_Spec)
+            then
                Put (On, ' ');
                Put (On, Strings.To_String (T.Direction));
             end if;

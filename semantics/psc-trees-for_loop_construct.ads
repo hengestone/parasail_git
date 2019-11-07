@@ -1,7 +1,7 @@
 ------------------------------------------------------------------------------
 --                              P A R A S A I L                             --
 --                                                                          --
---                     Copyright (C) 2012-2014, AdaCore                     --
+--                     Copyright (C) 2012-2019, AdaCore                     --
 --                                                                          --
 -- This is free software;  you can redistribute it  and/or modify it  under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -41,6 +41,7 @@ package PSC.Trees.For_Loop_Construct is
       Filter : Optional_Tree;
       Loop_Body : Optional_Tree;
       Direction : Strings.U_String := Strings.Null_U_String;
+      Chunk_Spec : Optional_Tree := Null_Optional_Tree;
    end record;
 
    function Make
@@ -50,6 +51,7 @@ package PSC.Trees.For_Loop_Construct is
       Filter : Lists.List;
       Loop_Body : Optional_Tree;
       Direction : Strings.U_String := Strings.Null_U_String;
+      Chunk_Spec : Optional_Tree := Null_Optional_Tree;
       End_With_Values : Optional_Tree := Null_Optional_Tree;
       Label : Optional_Tree := Null_Optional_Tree;
       Check_Label : Boolean := True)

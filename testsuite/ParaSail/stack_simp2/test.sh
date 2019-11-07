@@ -13,4 +13,4 @@ cat output |
 
 # Filter errors
 cat output |
-  grep "Error"
+  egrep "Error|Assertion"

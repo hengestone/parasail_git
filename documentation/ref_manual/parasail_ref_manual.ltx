@@ -3402,7 +3402,7 @@ each top-level compilation unit, and the ParaSail Virtual Machine instructions
 generated for each operation.  These listing files are produced whether or
 not an error is detected.   The ParaSail Virtual Machine instructions
 are only produced if the ParaSail compiler's semantic analysis 
-of the source code succeeds.  By default, a listing is not produced when there is a \verb'"-command"' specified.  This default can be overridden with the "-listing on/off" option on the \verb"psli'' command line.  Giving \verb'"-listing off"' will turn off listings in all cases.  Giving \verb'"-listing on"' will produce a listing in any case.  When using the \verb"interp.csh" script, you will need to give the \verb"-w" flag to
+of the source code succeeds.  By default, a listing is not produced when there is a \verb'"-command"' specified.  This default can be overridden with the \verb'"-listing on/off"' option on the \verb"psli" command line.  Giving \verb'"-listing off"' will turn off listings in all cases.  Giving \verb'"-listing on"' will produce a listing in any case.  When using the \verb"interp.csh" script, you will need to give the \verb"-w" flag to
 have a listing produced (see \verb"interp.csh -h" for a full list of flags for this script).
 
 Note that the error recovery of this ParaSail interpreter is not perfect,
@@ -3449,7 +3449,7 @@ Please send us the results of your experiments!
 There is now also a true \emph{compiler} for ParaSail, written in ParaSail itself.
 It converts the PSVM instructions into LLVM instructions, and then invokes
 the LLVM compiler/assembler  (llc/clang) to produce object code.  The 
-cshell-script which invokes the compiler is called "bin/pslc.csh" and you can run it
+cshell-script which invokes the compiler is called \verb"bin/pslc.csh" and you can run it
 with no arguments to learn how to invoke it.  The first time you use it, you will
 need to compile the ParaSail standard library (\verb"lib/aaa.psi") and the compiler
 itself.  This is done with the command \verb"bin/pslc.csh -b3" where \verb"-b3"

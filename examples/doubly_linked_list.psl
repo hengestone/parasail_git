@@ -58,7 +58,7 @@ class Doubly_Linked_Index is
         var New_Node for DLI := Node::(Next => Next, Prev => Prev);
 
         if DLI.First_Free != 0 then
-            // Reuse a free node`
+            // Reuse a free node
             New_Id := DLI.First_Free;
             DLI.First_Free := DLI.Links[New_Id].Next;
             DLI.Num_Free -= 1;

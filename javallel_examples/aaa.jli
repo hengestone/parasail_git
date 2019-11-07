@@ -126,13 +126,13 @@ class interface java.lang.UnivEnumeration<> {
       is import(#print_univ_enum)
 
     UnivString toString(UnivEnumeration Val)
-      is import(#identity)
+      is import(#to_string_enum)
 
     optional UnivEnumeration fromString(UnivString Str)
-      is import(#identity)
+      is import(#from_string_enum)
 
     UnivInteger hash(UnivEnumeration Val)
-      is import(#identity)
+      is import(#hash_enum)
 
     Boolean<> "in"(UnivEnumeration Left, Set<UnivEnumeration> Right)
       is in Set<UnivEnumeration>

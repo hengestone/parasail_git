@@ -9,7 +9,11 @@ func main (Args: Basic_Array <Univ_String>) is
     end loop
   else
     //  Read in points from JSON file, and use first N points
-    const Num_Points : Univ_Integer := From_String(Args[1])
+    const Num_Points : optional Univ_Integer := From_String(Args[1])
+    if Num_Points is null then
+       Println ("First parameter should be count of points: `(Args[1])")
+       return
+    end if
     const All_Points := Init_Points::Points(Limit => Num_Points)
     Points := All_Points[1..Num_Points]
   end if

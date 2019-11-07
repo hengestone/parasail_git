@@ -1,0 +1,58 @@
+interface PSL::Containers::Node_Tree<Key_Type is Hashable<>> is
+  //  Define a rooted tree of nodes, where each node may have zero or more
+  //  child nodes.  Each node in a tree is assigned a unique Node_Id.
+  //  Each child node has a key.  All children of a given node must
+  //  have unique keys, but the same key may be re-used for children
+  //  of different parent nodes.
+  //  Ancestors of a node may be retrieved, given the distance to the
+  //  ancestor.
+   type Node_Id is Integer<1 .. 100_000>;
+
+   func Create() -> Node_Tree;
+     //  Create a tree with a single (root) node.
+
+   op "[]"() -> Node_Tree is Create;
+     //  Create a (nearly) empty tree.
+
+   func Root(Node_Tree) -> Node_Id;
+     //  Return node id of root of tree.
+
+   func Num_Nodes(Node_Tree) -> Univ_Integer;
+   op "magnitude"(Node_Tree) -> Univ_Integer is Num_Nodes;
+     //  Return number of nodes in tree.
+     //  Root counts
+
+   func Add_Child(var Node_Tree; Parent : Node_Id; Key : Key_Type)
+     { Find_Node(Node_Tree, Parent, Key) is null }
+     -> Node_Id;
+     //  Add new child node to given Parent node, with given Key
+     //  Pre: child with given key must not exist
+
+   func Find_Child(Node_Tree; Parent : Node_Id; Key : Key_Type)
+     -> optional Node_Id;
+     //  Find child node of given Parent node, with given Key, if any.
+     //  Return null if no such child.
+
+   func Get_Child(var Node_Tree; Parent : Node_Id; Key : Key_Type)
+     -> Node_Id;
+     //  Add new child node to given Parent node, with given Key, if
+     //  it doesn't already exist.
+     //  If child already exists, return Node_Id of existing child.
+
+   func Children(Node_Tree; Parent : Node_Id) -> Ordered_Set<Node_Id>;
+     //  Return set of children of given node.
+
+   func Child_Keys(Node_Tree; Parent : Node_Id) -> Set<Key_Type>;
+     //  Return set of keys of children of given parent node.
+   
+   func Depth(Node_Tree; Node_Id) -> Univ_Integer {Depth >= 0};
+     //  Return depth of given node.  Depth(Root_Id) == 0
+
+   func Ancestor(Node_Tree; Node_Id;
+                      Distance : Univ_Integer {Distance >= 0})
+     -> optional Node_Id
+     //  Return ancestor node in tree, at given "distance."
+     //  Parent node at distance 1, Root node at distance Depth(Node_Id).
+     //  Return null if Distance > Depth(Node_Id)
+
+end interface PSL::Containers::Node_Tree;

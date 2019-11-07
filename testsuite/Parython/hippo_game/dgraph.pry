@@ -37,12 +37,14 @@ class interface DGraph<Element is Assignable<>> :
     def Has_Edge(DGraph; From, To : Node_Id) -> Boolean
       # Returns #true if Edge exists in graph going From to To
 
-    def Successors(ref const DGraph; Node_Id) -> ref const Node_Set
+    def Successors(ref const DGraph; Node_Id)
       {> Node_Id in DGraph <}
+      -> ref const Node_Set
       # The set of successors of a given node
 
-    def Predecessors(ref const DGraph; Node_Id) -> ref const Node_Set
+    def Predecessors(ref const DGraph; Node_Id)
       {> Node_Id in DGraph <}
+      -> ref const Node_Set
       # The set of predecessors of a given node
 
     def All_Nodes(DGraph) -> Node_Set

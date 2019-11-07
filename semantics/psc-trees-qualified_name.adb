@@ -1,7 +1,7 @@
 ------------------------------------------------------------------------------
 --                              P A R A S A I L                             --
 --                                                                          --
---                     Copyright (C) 2012-2013, AdaCore                     --
+--                     Copyright (C) 2012-2019, AdaCore                     --
 --                                                                          --
 -- This is free software;  you can redistribute it  and/or modify it  under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -80,7 +80,7 @@ package body PSC.Trees.Qualified_Name is
    begin
       Put_Indent (On, Indent);
       case Languages.Language is
-         when Languages.Sparkel =>
+         when Languages.Ada_Ish =>
             Display_Subtree (T.Prefix, On);
             if T.Uses_Selection_Syntax then
                Put (On, ".");

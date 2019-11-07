@@ -53,6 +53,9 @@ package body PSC.Trees.Semantics is
    Library_Bodies : Lists.List;  --  This is appended to Library after
                                  --  parsing is complete.
 
+   Debugger_Console : Boolean := False;
+      --  If True, will stop in debugger console right away.
+
    --  Current list of module imports.
    Current_Import_Clauses : Lists.List := Lists.Empty_List;
 
@@ -175,6 +178,12 @@ package body PSC.Trees.Semantics is
          if Num_Parts_Found > 0 then
             Put_Line (" " & To_String (Parts (Parts'First + Num_Parts_Found))
               & " not found.");
+         elsif Op_Name = "console"
+           or else Op_Name = "debugger"
+           or else Op_Name = "psldb"
+         then
+            --  Turn on the debugger console
+            Debugger_Console := True;
          elsif Op_Name = "debug" then
             --  Debug command
             if Words'Length = 1 then
@@ -189,6 +198,8 @@ package body PSC.Trees.Semantics is
                      Turn_On_Debugging;
                   elsif Operand = "off" then
                      Turn_Off_Debugging;
+                  elsif Operand = "console" then
+                     Debugger_Console := True;
                   elsif Operand (Operand'First) in '0' .. '9'
                     or else Operand (Operand'First) = '+'
                   then
@@ -442,7 +453,8 @@ package body PSC.Trees.Semantics is
                           (Routine_Ptr (Op_Sem.Routine),
                            Start_Pc => 1,
                            Context => Context,
-                           Thread_Was_Queued => Thread_Was_Queued);
+                           Thread_Was_Queued => Thread_Was_Queued,
+                           Debugger_Console => Debugger_Console);
 
                         pragma Assert (not Thread_Was_Queued);
 
@@ -535,7 +547,7 @@ package body PSC.Trees.Semantics is
                "Report problems at " &
                "http://groups.google.com/group/" &
                Languages.Language_Name_LC & "-programming-language");
-         when Languages.Sparkel =>
+         when Languages.Ada_Ish =>
             Put_Line (File,
                "Report problems on the Sparkel discussion forum;");
             Put_Line (File,

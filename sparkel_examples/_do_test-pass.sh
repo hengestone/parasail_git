@@ -1,4 +1,4 @@
-RUN="sklc aaa.ski"
+RUN="skli aaa.ski"
 
 echo "*** Simp_Loop"
 $RUN simp_loop.skl -command Test_Simp_Loop 5

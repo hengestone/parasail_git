@@ -1,7 +1,7 @@
 ------------------------------------------------------------------------------
 --                              P A R A S A I L                             --
 --                                                                          --
---                     Copyright (C) 2012-2015, AdaCore                     --
+--                     Copyright (C) 2012-2019, AdaCore                     --
 --                                                                          --
 -- This is free software;  you can redistribute it  and/or modify it  under --
 -- terms of the  GNU General Public License as published  by the Free Soft- --
@@ -122,7 +122,7 @@ package body PSC.Trees.Binary is
             when Languages.ParaSail | Languages.Parython |
               Languages.Javallel =>
                return "==";
-            when Languages.Sparkel =>
+            when Languages.Ada_Ish =>
                return "=";
          end case;
       when NEQ_Op =>
@@ -130,7 +130,7 @@ package body PSC.Trees.Binary is
             when Languages.ParaSail | Languages.Parython |
               Languages.Javallel =>
                return "!=";
-            when Languages.Sparkel =>
+            when Languages.Ada_Ish =>
                return "/=";
          end case;
       when GEQ_Op =>

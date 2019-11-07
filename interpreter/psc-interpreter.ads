@@ -8,11 +8,17 @@
 -- ware  Foundation;  either version 3,  or (at your option) any later ver- --
 -- sion.  This software is distributed in the hope  that it will be useful, --
 -- but WITHOUT ANY WARRANTY;  without even the implied warranty of MERCHAN- --
--- TABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public --
--- License for  more details.  You should have  received  a copy of the GNU --
--- General  Public  License  distributed  with  this  software;   see  file --
--- COPYING3.  If not, go to http://www.gnu.org/licenses for a complete copy --
--- of the license.                                                          --
+-- TABILITY or FITNESS FOR A PARTICULAR PURPOSE.                            --
+--                                                                          --
+-- As a special exception under Section 7 of GPL version 3, you are granted --
+-- additional permissions described in the GCC Runtime Library Exception,   --
+-- version 3.1, as published by the Free Software Foundation. See           --
+-- documentation/COPYING3 and documentation/GCC_RUNTIME3_1 for details.     --
+--                                                                          --
+-- In particular,  you can freely  distribute your programs  built with     --
+-- the ParaSail, Sparkel, Javallel, or Parython compiler, including any     --
+-- required library run-time units written in Ada or in any of the above    --
+-- languages, using any licensing terms  of your choosing.                  --
 --                                                                          --
 -- The ParaSail language and implementation were originally developed by    --
 -- S. Tucker Taft.                                                          --
@@ -362,7 +368,7 @@ package PSC.Interpreter is
    type Type_Index is range 0 .. 2 ** 16 - 1;
    --  Every type descriptor is assigned a unique index.
 
-   type Lock_Obj_Index is range 0 .. 2 ** 16 - 1;
+   type Lock_Obj_Index is range 0 .. 2 ** 15 - 1;
    --  Concurrent objects have an index of a lock object
 
    Large_Obj_Header_Size : constant Offset_Within_Area := 1;
@@ -2556,8 +2562,15 @@ package PSC.Interpreter is
      (Type_Desc    : Non_Op_Map_Type_Ptr;
       Stg_Rgn      : Stg_Rgn_Ptr;
       Server_Index : Thread_Server_Index) return Word_Type;
-   --  Create large object in given region. Initialize all subobjects to
-   --  appropriate kind of null
+   --  Create large (non-array) object in given region.
+   --  Initialize all subobjects to appropriate kind of null
+
+   procedure Init_Large_Obj
+     (Type_Desc    : Non_Op_Map_Type_Ptr;
+      Stg_Rgn      : Stg_Rgn_Ptr;
+      New_Obj      : Word_Type);
+   --  Initialize large (non-array) object in given region.
+   --  Initialize all subobjects to appropriate kind of null
 
    function Create_Basic_Array_Obj
      (Array_Type_Desc : Non_Op_Map_Type_Ptr;
@@ -2637,6 +2650,10 @@ package PSC.Interpreter is
      (Addr : Object_Virtual_Address) return Offset_Within_Chunk;
    --  Return size in words given a non-null large object
 
+   function Large_Obj_On_Stack
+     (Addr : Object_Virtual_Address) return Boolean;
+   --  Return True if given non-null large obj is residing on stack
+
    procedure Make_Copy_In_Stg_Rgn_Exported
      (Context                 : Exec_Context;
       Type_Info               : Type_Descriptor_Ptr;
@@ -2690,6 +2707,13 @@ package PSC.Interpreter is
       Existing_Obj : Word_Type) return Word_Type;
    pragma Export (Ada, New_Object_Exported, "_psc_new_object");
    --  Create new object in region based on Existing_Obj, unless is 0.
+
+   procedure Init_Large_Obj_Exported
+     (Context      : Exec_Context;
+      Type_Info    : Type_Descriptor_Ptr;
+      New_Obj      : Word_Type);
+   pragma Export (Ada, Init_Large_Obj_Exported, "_psc_init_large_obj");
+   --  Init new large object in current region.
 
    procedure Store_Null_Of_Same_Stg_Rgn_Exported
      (Context                 : Exec_Context;
@@ -2885,6 +2909,7 @@ package PSC.Interpreter is
       Start_Pc          : Code_Index;
       Context           : in out Exec_Context;
       Thread_Was_Queued : out Boolean;
+      Debugger_Console  : Boolean := False;
       Server_Index      : Thread_Server_Index := Main_Thread_Server_Index);
    --  This executes the instructions starting at Start_PC in the given
    --  routine, with the given Exec_Context.
@@ -2899,6 +2924,9 @@ package PSC.Interpreter is
    --  If Thread_Was_Queued is True upon return, then thread did *not*
    --  complete, but instead was queued waiting for a dequeue condition to
    --  be true.
+   --  If Debugger_Console is true, then we immediately invoke the
+   --  debugger console rather than executing instructions.
+   --  Context.Server_Index is set to zero if user requests shutdown.
 
    function Invoke_Parameterless_Computation
      (Computation    : Routine_Ptr;
@@ -3184,7 +3212,8 @@ private
    type Large_Obj (Size : Offset_Within_Area) is record
       Stg_Rgn   : Stg_Rgn_Index := 0;    --  16 bit unique region index
       Type_Info : Type_Index := 0;       --  16 bit unique type index
-      Lock_Obj  : Lock_Obj_Index := 0;   --  16 bit unique lock index
+      Lock_Obj  : Lock_Obj_Index := 0;   --  15 bit unique lock index
+      On_Stack  : Boolean := False;      --   1 bit is-on-stack flag
 
       Data      : Word_Array (2 .. Size) := (others => 0);
       --  Rest of large object
@@ -3195,7 +3224,8 @@ private
       Size      at 0 range  0 .. 15;
       Stg_Rgn   at 0 range 16 .. 31;
       Type_Info at 0 range 32 .. 47;
-      Lock_Obj  at 0 range 48 .. 63;
+      Lock_Obj  at 0 range 48 .. 62;
+      On_Stack  at 0 range 63 .. 63;
    end record;
 
    Type_Indicator : constant Word_Type := 16#5AFE_4DAD_5AFE_4DAD#;

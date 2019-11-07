@@ -353,6 +353,10 @@ interface PSC::Reflection<> is
         func Location(Decl) -> Object_Locator  //  Rename routine
           is in Object_Locator
 
+        func Component_Index(Decl) -> optional Offset_Within_Area
+          is import(#decl_component_index)
+          //  Returns offset if this is a component, otherwise null.
+
         func Decl_Region(Decl) -> optional Region
           is import(#decl_region)
         func Body_Region(Decl) -> optional Region
@@ -1015,6 +1019,53 @@ interface PSC::Reflection<> is
         const Pc : optional Instruction::Code_Offset;
         const Start_Pc : optional Instruction::Code_Offset;
         const Src_Pos : optional Source_Position;
+        const Master_Id : Univ_Integer;
+        const Thread_Id : Univ_Integer;
+
+        type Single_Step_Indicator is Integer<-3 .. 100>;
+          //  Indicator returned from invocation of debugger console
+          //  to indicate what should happen upon return:
+        const Stop_Execution : Single_Step_Indicator := -3;
+          //  Exit the program upon return from the debugger.
+        const Single_Step_Into : Single_Step_Indicator := -2;
+          //  Return to the debugger as soon as leaving the current line
+          //  including by calling another routine or returning.
+        const Single_Step_Over : Single_Step_Indicator := -1;
+          //  Return to the debugger as soon as leaving the current line,
+          //  but "step over" any calls.
+        const Continue_Execution : Single_Step_Indicator := 0;
+          //  Continue until hitting a breakpoint or an assertion failure.
+        const Step_Out : Countable_Range<Single_Step_Indicator> :=
+          1 .. Single_Step_Indicator::Last();
+          //  Stop upon exiting the specified number of stack frames.
+
+        type Breakpoint_Index is Integer<0 .. 100>;
+          //  Unique index for each breakpoint
+
+        type Debugger_Reason is Integer<-8 .. [[Breakpoint_Index::Last()]]>
+          //  Indicates the reason the debugger console was invoked,
+          //  passed as a parameter to Invoke_Debugger_Console.
+        const No_Reason : Debugger_Reason := 0;
+          //  Should not occur
+        const Step_Over_Finished : Debugger_Reason := -1;
+          //  A Step-Over just completed
+        const Step_Into_Finished : Debugger_Reason := -2;
+          //  A Step-Into just completed
+        const Step_Out_Finished : Debugger_Reason := -3;
+          //  A Step-Out just complerted
+        const Step_Over_Exited_Frame : Debugger_Reason := -4;
+          //  A Step-Over exited the frame (e.g. did a "return")
+        const Step_Into_Exited_Frame : Debugger_Reason := -5;
+          //  A Step-Into exited the frame (e.g. did a "return")
+        const Assertion_Failure : Debugger_Reason := -6;
+          //  ParaSail Assertion failed
+        const Null_Check_Failure : Debugger_Reason := -7;
+          //  Null check failed
+        const Internal_Failure : Debugger_Reason := -8;
+          //  Internal failure within interpreter
+        const Breakpoint_Encountered : Countable_Range<Debugger_Reason> :=
+          1 .. Debugger_Reason::Last();
+          //  Index of breakpoint reached
 
         func Num_Stack_Frames() -> Univ_Integer
           is import(#num_stack_frames);
@@ -1028,6 +1079,32 @@ interface PSC::Reflection<> is
           is import(#nth_frame_type_at_locator);
           //  Return type descriptor, given a locator for a type
           //  meaningful in a given stack frame.
+
+        func Set_Breakpoint(Op : Routine; Line : Univ_Integer)
+          -> Breakpoint_Index
+          is import(#set_breakpoint);
+          //  Set a breakpoint at the given line within the given
+          //  routine; returns the index identifying the breakpoint.
+          //  If breakpoint already exists at given location,
+          //  the old breakpoint number is returned.
+
+        func Clear_Breakpoint(Index : Breakpoint_Index)
+          is import(#clear_breakpoint);
+          //  Clear the given breakpoint
+
+        func Num_Breakpoints() -> Breakpoint_Index
+          is import(#num_breakpoints);
+          //  Returns a count of the number of breakpoints set (including
+          //  those that were set once, and have since been cleared).
+
+        func Nth_Breakpoint_Routine(Index : Breakpoint_Index) -> Routine
+          is import(#nth_breakpoint_routine);
+          //  Returns the routine associated with the given breakpoint.
+
+        func Nth_Breakpoint_Line(Index : Breakpoint_Index) -> Univ_Integer
+          is import(#nth_breakpoint_line);
+          //  Returns the line# associated with the given breakpoint.
+          //  Returns 0 if breakpoint has already been cleared.
 
         func Peek_At_Address
           (Base : optional Univ_Integer; Offset : Offset_Within_Area)

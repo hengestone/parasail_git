@@ -1,0 +1,54 @@
+Mapping Ada 202X concepts to PSVM
+
+- Access types
+These can be represented by an index into a global set of heap objects.
+All aliased objects need to be included in this same set.  
+
+In the long run we might create an additional level of indirection, to allow
+the objects to live in different regions.  Then we would store some kind
+of object descriptor in the global set, which would have the region
+number + a unique index which detects whether the region has been
+freed and re-used since the heap object was created.  And then finally
+we would have the address of the object within the region.
+
+The objects would probably need to be polymorphic, essentially Any+.
+
+Note this depends on solving the problem of gaining access to a
+global set.
+
+Access objects that are marked "Primary_Internal" might be able to
+just store the designated object directly, though that sounds like an
+optimization for the future.
+
+- Globals
+This either requires we pass an extra parameter to every subprogram that
+has any access to globals, or provide a "secret" way to gain access
+to a root global object.  Global objects would be part of a single
+global set/vector, or perhaps a set of "record" objects, one per package.
+We could combine the access type collection with globals in general, and
+use a single global id for both.  That would mean that effectively all
+global objects are treated as though they are aliased, even if they aren't.
+Note that using a set rather than a vector will create some overhead, so
+we might want to have a vector for globals and a set for aliased objects.
+
+We clearly need to allow concurrent access, so we may want this to be a builtin
+capability, much as that is disappointing.  Alternatively, we define a special
+module which provides atomic operations supporting what we need to extend
+and index into the set.
+
+The PSVM could be enhanced to support variables.  For non-pure modules,
+we would allow a "nested_vars" much like the current "nested_consts."
+Such non-pure modules will want something like a unique name as one of
+their module parameters, to be sure that we don't share instantiations
+when either the generic or some of the generic parameters are non-pure.
+If all of the parameters are pure, we could pass in as the unique name
+the usual unique type name, rather than the name based on the point
+of instantiation.
+
+- Ada Tasks
+At one point we talked about having active objects.  This would clearly be
+a good solution here.  We have the notion of a master, but we generally
+presume that we never have more than one master active in a given routine.
+But Ada tasks need a master that is potentially longer lived.  Potentially
+any scope with local tasks would be a separate routine.
+
